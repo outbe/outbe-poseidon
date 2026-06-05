@@ -1,0 +1,12 @@
+[package]
+name = "outbe-poseidon"
+version = "0.3.6"
+edition = "2021"
+description = "Poseidon hash implementation compatible with Circom"
+license = "MIT"
+repository = "https://github.com/outbe/outbe-poseidon"
+
+[dependencies]
+ark-ff = "0.5"
+ark-bn254 = "0.5"
+thiserror = "2.0.17"
