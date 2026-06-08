@@ -20,6 +20,12 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # `paste` is pulled transitively by ark-ff 0.5.0. Keep this
+    # temporary until we can migrate ark-ff/ark-bn254 to 0.6.x, where
+    # the dependency on `paste` has been removed.
+    { id = "RUSTSEC-2024-0436", reason = "Transitive via ark-ff 0.5.0; blocked on arkworks 0.6 migration." },
+]
 
 [licenses]
 version = 2

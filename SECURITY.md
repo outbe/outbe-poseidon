@@ -10,7 +10,7 @@ For each release ≥ the cutoff, the following files ship alongside the regular 
 
 | File | What it is |
 |---|---|
-| `outbe-poseidon-X.Y.Z.crate` | The byte-identical .crate uploaded to crates.io. |
+| `outbe-poseidon-X.Y.Z.crate` | The .crate packaged from the tagged source and attached to the GitHub Release. |
 | `outbe-poseidon-X.Y.Z.crate.sig` | cosign blob signature (raw, base64). |
 | `outbe-poseidon-X.Y.Z.crate.pem` | Fulcio-issued ephemeral signing cert (PEM). |
 | `SHA256SUMS` | SHA-256 of the .crate. |
@@ -23,14 +23,14 @@ Build-provenance attestations are not attached to the Release — they live in G
 The signing pipeline protects against:
 
 - **Tampered binaries on the Release page.** A re-uploaded `.crate` or `SHA256SUMS` won't verify against the original cert + sig.
-- **A compromised crates.io API token.** The same maintainer who can `cargo publish` cannot mint a sigstore signature whose Fulcio cert identity matches `https://github.com/outbe/outbe-poseidon/.github/workflows/ci.yml@refs/heads/main` (the cog flow) or `@refs/tags/vX.Y.Z` (a manual tag-push re-release). Those identities are only obtainable from inside a GitHub Actions run of this repo's `ci.yml` workflow.
-- **A typo or mis-targeted action update** silently weakening verification. The post-publish `verify-release` job hard-fails the workflow on any bad signature; an upstream change that breaks the cosign sign-blob flow is visible immediately.
+- **A forged or locally rebuilt release artifact.** A maintainer cannot mint a sigstore signature whose Fulcio cert identity matches `https://github.com/outbe/outbe-poseidon/.github/workflows/ci.yml@refs/heads/main` (the cog flow) or `@refs/tags/vX.Y.Z` (a manual tag-push re-release). Those identities are only obtainable from inside a GitHub Actions run of this repo's `ci.yml` workflow.
+- **A typo or mis-targeted action update** silently weakening verification. The post-release `verify-release` job hard-fails the workflow on any bad signature; an upstream change that breaks the cosign sign-blob flow is visible immediately.
 
 It does **not** protect against:
 
 - A compromise of `github.com/outbe/outbe-poseidon` itself (an attacker with push access to `main` can edit the workflow to remove or weaken signing).
 - A compromise of the sigstore public-good trust root (Fulcio CA, Rekor transparency log). The verify recipe trusts sigstore's TUF root by default.
-- Tampering with the crates.io copy of the tarball. crates.io has no first-party signing channel; the GH-Release-attached `.crate` is byte-identical to the crates.io upload, so a paranoid consumer can `cargo fetch`, hash, and compare against `SHA256SUMS`.
+- Consumers installing code from somewhere other than the signed GitHub Release. The Release-attached `.crate` is the reference artifact; third-party copies need to be compared against its signature or `SHA256SUMS`.
 - Existing (pre-cutoff) releases. Those are **not** retroactively signed — see [the spec's D10 rationale](https://github.com/outbe/outbe-poseidon/blob/main/SECURITY.md#retroactive-signing).
 
 ### Verification recipe
@@ -63,13 +63,13 @@ cosign verify-blob \
 gh attestation verify "$ARTIFACT" --repo "$REPO"
 ```
 
-Repeat for `SHA256SUMS` (and any other artifact) to verify the whole release set. CI's own `verify-release` job runs the same loop on every published release; a green `verify-release` is your signal that the regex above is the correct one for that release.
+Repeat for `SHA256SUMS` (and any other artifact) to verify the whole release set. CI's own `verify-release` job runs the same loop on every GitHub release; a green `verify-release` is your signal that the regex above is the correct one for that release.
 
 ### Retroactive signing
 
 Releases tagged **before** the cutoff are not signed. Backfilling would mint signatures whose Fulcio identity reads "a manual workflow_dispatch on YYYY-MM-DD by a maintainer," not "a tag-triggered run of the original release," which is weaker provenance than the absence of a signature — and potentially misleading to consumers who don't read the fine print. The next cog bump on the repo supersedes the unsigned release for any new consumer.
 
-If you need to verify an unsigned release (≤ v0.3.1), you're out of band — diff the `.crate` against the crates.io copy or pin to a signed release.
+If you need to verify an unsigned release (≤ v0.3.1), you're out of band — rebuild the package from the tag and compare the `.crate`, or pin to a signed release.
 
 ## Reporting vulnerabilities
 

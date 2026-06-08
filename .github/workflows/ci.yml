@@ -1,8 +1,8 @@
 name: CI
 
 # Triggers
-#   push:main         full pipeline incl. cog auto-bump + publish + github-release
-#   push:tags:["v*"]  release-only path; skip lint/test/build, run publish + github-release
+#   push:main         full pipeline incl. cog auto-bump + package + github-release
+#   push:tags:["v*"]  release-only path; skip lint/test/build, run package + github-release
 #                     against the named tag
 #   pull_request      lint/test/build/cargo-deny only — no release work
 #   schedule          nightly cargo-deny at 04:00 UTC to surface fresh advisories
@@ -299,13 +299,13 @@ jobs:
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
   # ----------------------------------------------------------------
-  # Publish (cog flow). Fires on (a) a fresh cog-pushed tag in the
+  # Package (cog flow). Fires on (a) a fresh cog-pushed tag in the
   # run above, or (b) a manual tag push / workflow_dispatch with
   # `tag` input. The "no new bump" case (tag job runs but creates no
   # tag) cleanly short-circuits via the `tag.outputs.tag != ''` guard.
   # ----------------------------------------------------------------
-  publish:
-    name: Publish to crates.io
+  package:
+    name: Package release artifact
     runs-on: ubuntu-latest
     needs: [resolve, tag]
     if: |
@@ -318,33 +318,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # Check out the freshly-created tag (or the manually-named
-          # one) so cargo publish ships the bumped Cargo.toml the
+          # one) so cargo package ships the bumped Cargo.toml the
           # `tag` job's cog run wrote, not the pre-bump HEAD.
           ref: ${{ needs.tag.outputs.tag || needs.resolve.outputs.release_tag }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: cargo
 
-      - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          cargo publish --verbose --token "${CARGO_REGISTRY_TOKEN}"
+      - name: Package .crate for artifact upload
+        run: cargo package --verbose
 
-      # Re-create the .crate locally. `cargo publish` cleans up
-      # target/package/*.crate after a successful upload; `cargo
-      # package --no-verify` is fast (skips the re-build) and
-      # deterministic given the same source tree, so the resulting
-      # bytes match what crates.io just received.
-      - name: Re-package .crate for artifact upload
-        if: success()
-        run: cargo package --no-verify
-
-      # Upload the byte-identical `.crate` as a workflow artifact so
+      # Upload the `.crate` as a workflow artifact so
       # the `github-release` job can attach it to the GH Release
-      # alongside the crates.io copy. Signing in a follow-up commit
-      # will produce one sigstore signature that verifies both the
-      # GH-Release-attached and crates.io copies.
+      # and sign the same bytes that consumers can download.
       - name: Upload .crate as workflow artifact
         if: success()
         uses: actions/upload-artifact@v4
@@ -355,18 +341,14 @@ jobs:
           retention-days: 1
 
   # ----------------------------------------------------------------
-  # GitHub release. Attaches the byte-identical `.crate` (from the
-  # `publish` job's workflow artifact) and a SHA256SUMS file
-  # alongside the auto-generated notes. The crates.io upload remains
-  # the canonical install channel; the GH Release adds an
-  # alternate-checksummed copy for downstream consumers that prefer
-  # GitHub-hosted artifacts (and is the signing pipeline's anchor in
-  # a follow-up commit).
+  # GitHub release. Attaches the `.crate` (from the `package` job's
+  # workflow artifact) and a SHA256SUMS file alongside the auto-
+  # generated notes. The GH Release is the signed distribution point.
   # ----------------------------------------------------------------
   github-release:
     name: Create GitHub release
     runs-on: ubuntu-latest
-    needs: [resolve, tag, publish]
+    needs: [resolve, tag, package]
     if: |
       always() &&
       (
@@ -386,14 +368,14 @@ jobs:
           ref: ${{ needs.tag.outputs.tag || needs.resolve.outputs.release_tag }}
 
       - name: Download .crate artifact
-        if: needs.publish.result == 'success'
+        if: needs.package.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: crate-tarball
           path: dist/
 
       - name: Generate SHA256SUMS
-        if: needs.publish.result == 'success'
+        if: needs.package.result == 'success'
         run: |
           set -euo pipefail
           cd dist
@@ -402,7 +384,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Install cosign
-        if: needs.publish.result == 'success'
+        if: needs.package.result == 'success'
         uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # pin-target: v3
 
       # Keyless OIDC sign-blob over every staged artifact (.crate +
@@ -410,7 +392,7 @@ jobs:
       # issued ephemeral cert). Skips files that are themselves a sig
       # or cert so a re-run is idempotent.
       - name: Sign release artifacts (cosign keyless)
-        if: needs.publish.result == 'success'
+        if: needs.package.result == 'success'
         run: |
           set -euo pipefail
           cd dist
@@ -430,7 +412,7 @@ jobs:
       # verify`); the local DSSE bundle is also captured for users who
       # want offline verification via `cosign verify-blob-attestation`.
       - name: Generate SLSA build provenance
-        if: needs.publish.result == 'success'
+        if: needs.package.result == 'success'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # pin-target: v2
         with:
           subject-path: |
@@ -440,17 +422,17 @@ jobs:
       - name: Compose release body
         env:
           TAG: ${{ needs.tag.outputs.tag || needs.resolve.outputs.release_tag }}
-          PUBLISH_RESULT: ${{ needs.publish.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
         run: |
           set -euo pipefail
           {
             echo "## Install"
             echo
-            echo "    cargo add outbe-poseidon@${TAG#v}"
+            echo "    cargo add outbe-poseidon --git https://github.com/outbe/outbe-poseidon --tag ${TAG}"
             echo
             echo "## Artifacts"
             echo
-            echo "- \`outbe-poseidon-${TAG#v}.crate\` — byte-identical to the crates.io upload."
+            echo "- \`outbe-poseidon-${TAG#v}.crate\` — packaged from the tagged source."
             echo "- \`SHA256SUMS\` — SHA-256 of the .crate."
             echo "- \`*.sig\` + \`*.pem\` — sigstore cosign keyless signature + Fulcio cert per artifact."
             echo
@@ -460,7 +442,7 @@ jobs:
             echo
             echo "## CI"
             echo
-            echo "- crates.io publish: ${PUBLISH_RESULT}"
+            echo "- package artifact: ${PACKAGE_RESULT}"
           } > RELEASE_BODY.md
           cat RELEASE_BODY.md
 
@@ -479,7 +461,7 @@ jobs:
             dist/SHA256SUMS
 
   # ----------------------------------------------------------------
-  # verify-release: post-publish smoke test. Re-downloads every asset
+  # verify-release: post-release smoke test. Re-downloads every asset
   # of the release we just cut and runs `cosign verify-blob` against
   # each one. Hard-fails the workflow on any bad signature — this is
   # the regression test for both the action SHA pins and the cert-
@@ -490,11 +472,11 @@ jobs:
   verify-release:
     name: Verify signed release
     runs-on: ubuntu-latest
-    needs: [resolve, tag, publish, github-release]
+    needs: [resolve, tag, package, github-release]
     if: |
       always() &&
       needs.github-release.result == 'success' &&
-      needs.publish.result == 'success' &&
+      needs.package.result == 'success' &&
       (
         (needs.tag.result == 'success' && needs.tag.outputs.tag != '') ||
         needs.resolve.outputs.release_tag != ''
