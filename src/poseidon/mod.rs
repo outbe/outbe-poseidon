@@ -1,7 +1,7 @@
 //! Circom-compatible Poseidon — the original Outbe hash.
 //!
 //! The permutation and pre-generated BN254 parameters live here; the
-//! [`PoseidonHasher`](crate::PoseidonHasher) trait this implements is defined in
+//! [`PoseidonHasher`](PoseidonHasher) trait this implements is defined in
 //! the crate root and shared with [`Poseidon2`](crate::Poseidon2).
 
 use ark_bn254::Fr;
