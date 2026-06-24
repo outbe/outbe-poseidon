@@ -1,8 +1,8 @@
 [package]
 name = "outbe-poseidon"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
-description = "Poseidon hash implementation compatible with Circom"
+description = "BN254 Poseidon (Circom-compatible) and Poseidon2 (Barretenberg/noir-compatible) hash implementations"
 license = "MIT"
 repository = "https://github.com/outbe/outbe-poseidon"
 
