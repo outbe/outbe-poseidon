@@ -74,7 +74,7 @@ If you need to verify an unsigned release (≤ v0.3.1), you're out of band — d
 
 ## CI secrets
 
-Release automation needs two repository secrets. Set them at **Settings → Secrets and variables → Actions → New repository secret** on `outbe/outbe-poseidon`. Organization secrets also work if this repo is in the selected set. `RELEASE_TOKEN` is read by `ci.yml`'s `bump` job; `CARGO_REGISTRY_TOKEN` is read by `release.yml`'s `publish` job.
+Release automation needs two repository secrets. Set them at **Settings → Secrets and variables → Actions → New repository secret** on `outbe/outbe-poseidon`. Organization secrets also work if this repo is in the selected set. `RELEASE_TOKEN` is read by `check.yml`'s `bump` job; `CARGO_REGISTRY_TOKEN` is read by `release.yml`'s `publish` job.
 
 Do not put either value in the workflow file, in `Cargo.toml`, or in a commit.
 

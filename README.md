@@ -2,7 +2,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/outbe-poseidon.svg)](https://crates.io/crates/outbe-poseidon)
 [![release](https://img.shields.io/github/v/release/outbe/outbe-poseidon.svg)](https://github.com/outbe/outbe-poseidon/releases)
-[![CI](https://github.com/outbe/outbe-poseidon/actions/workflows/ci.yml/badge.svg)](https://github.com/outbe/outbe-poseidon/actions/workflows/ci.yml)
+[![CI](https://github.com/outbe/outbe-poseidon/actions/workflows/check.yml/badge.svg)](https://github.com/outbe/outbe-poseidon/actions/workflows/check.yml)
 
 <!-- cargo-rdme start -->
 

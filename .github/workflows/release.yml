@@ -1,7 +1,7 @@
 name: release
 
 # Runs when a `v*` tag lands. In the normal path that tag comes from
-# ci.yml's `bump` job, which pushes it with RELEASE_TOKEN so this
+# check.yml's `bump` job, which pushes it with RELEASE_TOKEN so this
 # workflow can start (the default GITHUB_TOKEN cannot). A tag pushed
 # by hand, or a maintainer-named re-release via workflow_dispatch,
 # works the same way.
