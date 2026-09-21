@@ -23,7 +23,7 @@ Build-provenance attestations are not attached to the Release — they live in G
 The signing pipeline protects against:
 
 - **Tampered binaries on the Release page.** A re-uploaded `.crate` or `SHA256SUMS` won't verify against the original cert + sig.
-- **A compromised crates.io API token.** The same maintainer who can `cargo publish` cannot mint a sigstore signature whose Fulcio cert identity matches `https://github.com/outbe/outbe-poseidon/.github/workflows/ci.yml@refs/heads/main` (a `workflow_dispatch` re-release) or `@refs/tags/vX.Y.Z` (the cog tag-push flow). Those identities are only obtainable from inside a GitHub Actions run of this repo's `ci.yml` workflow.
+- **A compromised crates.io API token.** The same maintainer who can `cargo publish` cannot mint a sigstore signature whose Fulcio cert identity matches `https://github.com/outbe/outbe-poseidon/.github/workflows/release.yml@refs/heads/main` (a `workflow_dispatch` re-release) or `@refs/tags/vX.Y.Z` (the cog tag-push flow). Those identities are only obtainable from inside a GitHub Actions run of this repo's `release.yml` workflow.
 - **A forged or locally rebuilt release artifact.** Same identity pin as above.
 - **A typo or mis-targeted action update** silently weakening verification. The post-publish `verify-release` job hard-fails the workflow on any bad signature; an upstream change that breaks the cosign sign-blob flow is visible immediately.
 
@@ -51,12 +51,12 @@ gh release download "$TAG" --repo "$REPO" \
   --pattern "$ARTIFACT.pem"
 
 # Verify. The --certificate-identity-regexp pins the signer to a
-# tag-triggered run of THIS repo's ci.yml. Any mismatch is a fail.
+# tag-triggered run of THIS repo's release.yml. Any mismatch is a fail.
 cosign verify-blob \
   --certificate "$ARTIFACT.pem" \
   --signature   "$ARTIFACT.sig" \
   --certificate-identity-regexp \
-    '^https://github\.com/outbe/outbe-poseidon/\.github/workflows/ci\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+)$' \
+    '^https://github\.com/outbe/outbe-poseidon/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+)$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "$ARTIFACT"
 
@@ -74,7 +74,7 @@ If you need to verify an unsigned release (≤ v0.3.1), you're out of band — d
 
 ## CI secrets
 
-Release automation in `.github/workflows/ci.yml` needs two repository secrets. Set them at **Settings → Secrets and variables → Actions → New repository secret** on `outbe/outbe-poseidon`. Organization secrets also work if this repo is in the selected set.
+Release automation needs two repository secrets. Set them at **Settings → Secrets and variables → Actions → New repository secret** on `outbe/outbe-poseidon`. Organization secrets also work if this repo is in the selected set. `RELEASE_TOKEN` is read by `ci.yml`'s `bump` job; `CARGO_REGISTRY_TOKEN` is read by `release.yml`'s `publish` job.
 
 Do not put either value in the workflow file, in `Cargo.toml`, or in a commit.
 
@@ -90,7 +90,7 @@ Create the token as a user who is allowed to push to `main` (add that user to th
 Classic PAT (simplest):
 
 1. GitHub → **Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token**.
-2. Scopes: `repo` (private repo contents + tags) and `workflow` (so the tag push is allowed to start `ci.yml`).
+2. Scopes: `repo` (private repo contents + tags) and `workflow` (so the tag push is allowed to start `release.yml`).
 3. Copy the token once. Store it as repository secret `RELEASE_TOKEN`.
 
 Fine-grained PAT:
@@ -122,7 +122,7 @@ After the crate exists, owners can switch the job to [Trusted Publishing](https:
 
 1. **Settings → Secrets and variables → Actions** lists `RELEASE_TOKEN` and `CARGO_REGISTRY_TOKEN`.
 2. `RELEASE_TOKEN` is read on the next push to `main` that is not a `chore(version):` commit. A missing value fails the `bump` job with a pointer back here.
-3. `CARGO_REGISTRY_TOKEN` is read on the release path. The first publish is the next `feat`/`fix` merge to `main` (cog cuts a tag and the tag-push run publishes) or **Actions → CI → Run workflow** with `tag` set to an existing `v*` tag that is not yet on crates.io (for example `v0.11.0`).
+3. `CARGO_REGISTRY_TOKEN` is read by `release.yml`. The first publish is the next `feat`/`fix` merge to `main` (cog cuts a tag and `release.yml` publishes) or **Actions → release → Run workflow** with `tag` set to an existing `v*` tag that is not yet on crates.io (for example `v0.11.0`).
 
 ## Reporting vulnerabilities
 

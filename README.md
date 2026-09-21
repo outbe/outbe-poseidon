@@ -103,7 +103,7 @@ gh release download "$TAG" --repo outbe/outbe-poseidon \
 cosign verify-blob \
   --certificate "$ARTIFACT.pem" --signature "$ARTIFACT.sig" \
   --certificate-identity-regexp \
-    '^https://github\.com/outbe/outbe-poseidon/\.github/workflows/ci\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+)$' \
+    '^https://github\.com/outbe/outbe-poseidon/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+)$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "$ARTIFACT"
 ```
