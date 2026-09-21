@@ -5,6 +5,12 @@ edition = "2021"
 description = "BN254 Poseidon (Circom-compatible) and Poseidon2 (Barretenberg/noir-compatible) hash implementations"
 license = "MIT"
 repository = "https://github.com/outbe/outbe-poseidon"
+homepage = "https://github.com/outbe/outbe-poseidon"
+documentation = "https://docs.rs/outbe-poseidon"
+readme = "README.md"
+keywords = ["poseidon", "hash", "zk", "bn254", "circom"]
+categories = ["cryptography"]
+exclude = [".actrc", ".github/*", ".idea/*"]
 
 [dependencies]
 ark-ff = "0.6.0"
