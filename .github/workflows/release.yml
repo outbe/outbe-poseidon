@@ -6,6 +6,10 @@ name: release
 # by hand, or a maintainer-named re-release via workflow_dispatch,
 # works the same way.
 #
+# Order: package → GitHub Release (signed) → verify signatures →
+# crates.io. crates.io versions cannot be replaced, so the registry
+# upload waits until the signed GitHub Release is in place.
+#
 # Secrets (see SECURITY.md):
 #   CARGO_REGISTRY_TOKEN   crates.io API token (publish-new + publish-update)
 on:
@@ -32,12 +36,11 @@ env:
 
 jobs:
   # ----------------------------------------------------------------
-  # crates.io upload, then re-package the same tree so github-release
-  # can attach a byte-identical `.crate`. Re-cutting a tag whose
-  # version is already on crates.io skips the upload.
+  # Build the `.crate` once. github-release attaches these bytes;
+  # publish later uploads the same tree to crates.io.
   # ----------------------------------------------------------------
-  publish:
-    name: Publish to crates.io
+  package:
+    name: Package crate
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -62,43 +65,8 @@ jobs:
           fi
           echo "::notice::${TAG} matches the package manifest"
 
-      - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
-            echo "::error::CARGO_REGISTRY_TOKEN is not set. See SECURITY.md (CI secrets)."
-            exit 1
-          fi
-          version="${TAG#v}"
-          # Re-cutting a GitHub Release for an already-published version
-          # must not fail the rest of the pipeline on crates.io's
-          # "already uploaded" error. crates.io requires a User-Agent.
-          status="$(curl -sS -o /tmp/crate.json -w '%{http_code}' \
-            -A 'outbe-poseidon-ci (https://github.com/outbe/outbe-poseidon)' \
-            "https://crates.io/api/v1/crates/outbe-poseidon/${version}")"
-          case "$status" in
-            200)
-              echo "::notice::outbe-poseidon@${version} already on crates.io; skipping publish"
-              ;;
-            404)
-              cargo publish --verbose --token "${CARGO_REGISTRY_TOKEN}"
-              ;;
-            *)
-              echo "::error::crates.io lookup failed (HTTP ${status})"
-              cat /tmp/crate.json || true
-              exit 1
-              ;;
-          esac
-
-      # Re-create the .crate locally. `cargo publish` cleans up
-      # target/package/*.crate after a successful upload; `cargo
-      # package --no-verify` is fast (skips the re-build) and
-      # deterministic given the same source tree, so the resulting
-      # bytes match what crates.io just received (or would receive).
-      - name: Re-package .crate for artifact upload
-        run: cargo package --no-verify
+      - name: Package .crate
+        run: cargo package --locked
 
       - name: Upload .crate as workflow artifact
         uses: actions/upload-artifact@v4
@@ -109,16 +77,15 @@ jobs:
           retention-days: 1
 
   # ----------------------------------------------------------------
-  # GitHub release. Attaches the byte-identical `.crate` and a
-  # SHA256SUMS file alongside the auto-generated notes. crates.io is
-  # the canonical install channel; the GH Release is the signed
-  # distribution point.
+  # GitHub release. Attaches the packaged `.crate` and a SHA256SUMS
+  # file alongside the auto-generated notes. This job is the signed
+  # distribution point; crates.io upload follows after verify.
   # ----------------------------------------------------------------
   github-release:
     name: Create GitHub release
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [publish]
+    needs: [package]
     # id-token + attestations so cosign keyless +
     # actions/attest-build-provenance can mint an OIDC token and write
     # to the GitHub attestation store.
@@ -179,8 +146,6 @@ jobs:
             dist/SHA256SUMS
 
       - name: Compose release body
-        env:
-          PUBLISH_RESULT: ${{ needs.publish.result }}
         run: |
           set -euo pipefail
           {
@@ -190,17 +155,13 @@ jobs:
             echo
             echo "## Artifacts"
             echo
-            echo "- \`outbe-poseidon-${TAG#v}.crate\` — byte-identical to the crates.io upload."
+            echo "- \`outbe-poseidon-${TAG#v}.crate\` — packaged from this tag; crates.io upload follows this release."
             echo "- \`SHA256SUMS\` — SHA-256 of the .crate."
             echo "- \`*.sig\` + \`*.pem\` — sigstore cosign keyless signature + Fulcio cert per artifact."
             echo
             echo "## Verification"
             echo
             echo "See [SECURITY.md](https://github.com/outbe/outbe-poseidon/blob/main/SECURITY.md) for the verify recipe."
-            echo
-            echo "## CI"
-            echo
-            echo "- crates.io publish: ${PUBLISH_RESULT}"
           } > RELEASE_BODY.md
           cat RELEASE_BODY.md
 
@@ -219,16 +180,16 @@ jobs:
             dist/SHA256SUMS
 
   # ----------------------------------------------------------------
-  # Post-publish smoke test. Re-downloads every asset of the release
-  # we just cut and runs `cosign verify-blob` against each one.
-  # Hard-fails the workflow on any bad signature — this is the
-  # regression test for both the action SHA pins and the cert-
-  # identity regex below.
+  # Smoke test the GitHub Release. Re-downloads every asset and runs
+  # `cosign verify-blob` against each one. Hard-fails the workflow on
+  # any bad signature — this is the regression test for both the
+  # action SHA pins and the cert-identity regex below. crates.io
+  # waits on this job so a bad signature never reaches the registry.
   # ----------------------------------------------------------------
   verify-release:
     name: Verify signed release
     runs-on: ubuntu-latest
-    needs: [publish, github-release]
+    needs: [github-release]
     permissions:
       contents: read
       id-token: write
@@ -286,3 +247,54 @@ jobs:
             exit 1
           fi
           echo "All artifacts verified."
+
+  # ----------------------------------------------------------------
+  # crates.io upload from the same tagged tree. Re-cutting a tag
+  # whose version is already on crates.io skips the upload.
+  # ----------------------------------------------------------------
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [verify-release]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: cargo
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is not set. See SECURITY.md (CI secrets)."
+            exit 1
+          fi
+          version="${TAG#v}"
+          # Re-cutting a GitHub Release for an already-published version
+          # must not fail the rest of the pipeline on crates.io's
+          # "already uploaded" error. crates.io requires a User-Agent.
+          status="$(curl -sS -o /tmp/crate.json -w '%{http_code}' \
+            -A 'outbe-poseidon-ci (https://github.com/outbe/outbe-poseidon)' \
+            "https://crates.io/api/v1/crates/outbe-poseidon/${version}")"
+          case "$status" in
+            200)
+              echo "::notice::outbe-poseidon@${version} already on crates.io; skipping publish"
+              ;;
+            404)
+              cargo publish --locked --no-verify --verbose --token "${CARGO_REGISTRY_TOKEN}"
+              ;;
+            *)
+              echo "::error::crates.io lookup failed (HTTP ${status})"
+              cat /tmp/crate.json || true
+              exit 1
+              ;;
+          esac
