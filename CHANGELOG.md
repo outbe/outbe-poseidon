@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.13.0 - 2026-09-21
+#### Miscellaneous Chores
+- cut releases only from a manual tag (#7) - (ecdd4ce) - latexstone
+
+- - -
+
 ## v0.11.1 - 2026-09-21
 #### Bug Fixes
 - ensure Cargo.lock version matches root package during release (#6) - (554c02a) - latexstone
