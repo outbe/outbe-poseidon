@@ -1,0 +1,22 @@
+name: cargo-deny
+
+# Nightly advisory scan, split out of ci.yml so GitHub disabling this
+# scheduled workflow (inactivity or 14 consecutive failures) cannot
+# take pull-request checks down with it.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check all
