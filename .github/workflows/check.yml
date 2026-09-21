@@ -1,17 +1,14 @@
 name: CI
 
 # Triggers
-#   push:main         lint/test/build + cog auto-bump. The bump job pushes
-#                     the `v*` tag with RELEASE_TOKEN so release.yml can
-#                     start (the default GITHUB_TOKEN cannot).
+#   push:main         lint/test/build
 #   pull_request      lint/test/build/cargo-deny + version preview
 #   workflow_dispatch re-run the main pipeline by hand
 # Nightly cargo-deny lives in cargo-deny.yml so a disabled scheduled
 # workflow cannot take PR checks down with it.
 #
-# Secrets (see SECURITY.md):
-#   RELEASE_TOKEN   PAT that can push to main (bypass ruleset) and whose
-#                   tag push is allowed to start release.yml
+# Releases are cut from release.yml (Actions → release → Run workflow)
+# with an explicit tag. This workflow does not tag or publish.
 
 on:
   push:
@@ -22,7 +19,6 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Never cancel a push-to-main run: that is the one that cuts the tag.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -217,10 +213,10 @@ jobs:
   # ----------------------------------------------------------------
   # Versioning (cocogitto). See cog.toml.
   #
-  # Pull requests only: report the version a merge would cut, tagging
-  # nothing. The history predates Conventional Commits, so the check
-  # covers the range the pull request introduces rather than the
-  # whole log. Mirrors outbe-circuits.
+  # Pull requests only: report the SemVer `cog bump --auto` would
+  # suggest. Releases themselves are cut by hand from release.yml.
+  # The history predates Conventional Commits, so the check covers
+  # the range the pull request introduces rather than the whole log.
   # ----------------------------------------------------------------
   preview-version:
     name: preview next version
@@ -253,72 +249,8 @@ jobs:
           sed 's/^branch_whitelist.*/branch_whitelist = []/' cog.toml > "$cfg"
           if out="$(cog --config "$cfg" bump --auto --dry-run --skip-untracked 2>/dev/null)"; then
             tag="$(printf '%s\n' "$out" | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*' | tail -n1 || true)"
-            echo "::notice::next release would be: ${tag:-<no bump warranted>}"
+            echo "::notice::cog bump --auto would suggest: ${tag:-<no bump warranted>} (releases are cut from the release workflow)"
           else
-            echo "::notice::no bump warranted"
-          fi
-
-  # ----------------------------------------------------------------
-  # main only, once every gate is green: cut the next v* tag, then
-  # push the bump commit and the tag through cog.toml's post-bump
-  # hooks. The push uses RELEASE_TOKEN so the owner bypasses the
-  # branch ruleset; that also lets the tag push start release.yml,
-  # which the default GITHUB_TOKEN cannot do.
-  # Mirrors outbe-circuits.
-  # ----------------------------------------------------------------
-  bump:
-    name: bump version & tag
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: [cargo-deny, lint, test, build]
-    if: |
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      !startsWith(github.event.head_commit.message, 'chore(version):') &&
-      !contains(github.event.head_commit.message, '[skip ci]')
-    steps:
-      - name: Require RELEASE_TOKEN
-        env:
-          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: |
-          if [ -z "${RELEASE_TOKEN}" ]; then
-            echo "::error::RELEASE_TOKEN is not set. See SECURITY.md (CI secrets)."
-            exit 1
-          fi
-
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.RELEASE_TOKEN }}
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cocogitto
-
-      - name: Configure the committer
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Validate the new commit
-        run: cog check --ignore-merge-commits "HEAD^..HEAD"
-
-      - name: Cocogitto bump
-        shell: bash
-        run: |
-          set -euo pipefail
-          # cog does not see the CI checkout as `main`, so its own
-          # branch_whitelist guard would reject the bump. The job `if:`
-          # above is what restricts this to a push on main. Every hook
-          # from cog.toml is preserved and runs with the checkout
-          # credentials (RELEASE_TOKEN).
-          cfg="$(mktemp -d)/cog.toml"
-          sed 's/^branch_whitelist.*/branch_whitelist = []/' cog.toml > "$cfg"
-          cog --config "$cfg" bump --auto
-          tag="$(git tag --points-at HEAD | grep '^v' | head -n1 || true)"
-          if [ -n "$tag" ]; then
-            echo "::notice::cut ${tag}; release.yml runs on the tag push"
-          else
-            echo "::notice::no bump warranted"
+            echo "::notice::no bump warranted (releases are cut from the release workflow)"
           fi
 

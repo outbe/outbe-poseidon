@@ -25,16 +25,10 @@ pre_bump_hooks = [
     "sed -i '/^name = \"outbe-poseidon\"$/{n;s/^version = \".*\"/version = \"{{version}}\"/;}' Cargo.lock",
 ]
 
-# After cog bumps the version + writes the tag, push both back to
-# the remote so release.yml (`on: push: tags`) picks the tag up and
-# publishes. CI's bump job checks out with RELEASE_TOKEN so this
-# push is allowed to start that workflow (the default GITHUB_TOKEN
-# cannot). The post_bump_hooks also let a maintainer running
-# `cog bump --auto` locally get the same end state.
-post_bump_hooks = [
-    "git push origin HEAD:main",
-    "git push origin v{{version}}",
-]
+# No post_bump_hooks. release.yml's bump job pushes the commit and
+# the v* tag after cog returns. A local `cog bump` must not push a
+# tag that has no GitHub Release or crates.io publish; cut releases
+# from Actions → release → Run workflow.
 
 [changelog]
 path = "CHANGELOG.md"
