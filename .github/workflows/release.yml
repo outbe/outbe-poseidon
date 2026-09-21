@@ -1,25 +1,26 @@
 name: release
 
-# Runs when a `v*` tag lands. In the normal path that tag comes from
-# check.yml's `bump` job, which pushes it with RELEASE_TOKEN so this
-# workflow can start (the default GITHUB_TOKEN cannot). A tag pushed
-# by hand, or a maintainer-named re-release via workflow_dispatch,
-# works the same way.
+# Manual releases only. Start from Actions → release → Run workflow,
+# on branch `main`, with the new tag (e.g. v0.12.0).
 #
-# Order: package → GitHub Release (signed) → verify signatures →
-# crates.io. crates.io versions cannot be replaced, so the registry
-# upload waits until the signed GitHub Release is in place.
+# Order: bump (Cargo.toml, Cargo.lock, CHANGELOG, commit, tag)
+#      → package
+#      → GitHub Release (signed)
+#      → verify signatures
+#      → crates.io
+#
+# crates.io versions cannot be replaced, so the registry upload waits
+# until the signed GitHub Release is in place.
 #
 # Secrets (see SECURITY.md):
+#   RELEASE_TOKEN          PAT that can push the bump commit to main
+#                          and the v* tag (bypass branch ruleset)
 #   CARGO_REGISTRY_TOKEN   crates.io API token (publish-new + publish-update)
 on:
-  push:
-    tags:
-      - "v[0-9]+.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.11.0)"
+        description: "New tag to cut (e.g. v0.12.0). Optional v prefix."
         required: true
         type: string
 
@@ -27,14 +28,115 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  # One release at a time so two dispatches cannot race on main.
+  group: release
   cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  # ----------------------------------------------------------------
+  # Cut the bump commit and the tag on main. Re-running the workflow
+  # with a tag that already exists skips this job's write and the
+  # later jobs package that existing tag.
+  # ----------------------------------------------------------------
+  bump:
+    name: Bump version and tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.cut.outputs.tag }}
+      version: ${{ steps.cut.outputs.version }}
+    steps:
+      - name: Require RELEASE_TOKEN
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "${RELEASE_TOKEN}" ]; then
+            echo "::error::RELEASE_TOKEN is not set. See SECURITY.md (CI secrets)."
+            exit 1
+          fi
+
+      - name: Validate the run
+        env:
+          RAW_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Run this workflow from main (Use workflow from: main)."
+            exit 1
+          fi
+          tag="${RAW_TAG#"${RAW_TAG%%[![:space:]]*}"}"
+          tag="${tag%"${tag##*[![:space:]]}"}"
+          tag="${tag#v}"
+          if [[ ! "${tag}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag must be SemVer X.Y.Z (optional v prefix), got: ${RAW_TAG}"
+            exit 1
+          fi
+          echo "TAG=v${tag}" >> "${GITHUB_ENV}"
+          echo "VERSION=${tag}" >> "${GITHUB_ENV}"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cocogitto
+
+      - name: Configure the committer
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump Cargo.toml, Cargo.lock, CHANGELOG, and tag
+        id: cut
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          git checkout -B main origin/main
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::notice::${TAG} already exists; skipping bump"
+            echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+            echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          manifest="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ "${manifest}" = "${VERSION}" ]; then
+            echo "::error::Cargo.toml is already ${VERSION} but tag ${TAG} is missing"
+            exit 1
+          fi
+          newest="$(printf '%s\n%s\n' "${manifest}" "${VERSION}" | sort -V | tail -n1)"
+          if [ "${newest}" != "${VERSION}" ]; then
+            echo "::error::${TAG} is not greater than current ${manifest}"
+            exit 1
+          fi
+
+          # cog does not always see the CI checkout as `main`, so its
+          # branch_whitelist guard would reject the bump. This job
+          # already required GITHUB_REF == refs/heads/main.
+          cfg="$(mktemp -d)/cog.toml"
+          sed 's/^branch_whitelist.*/branch_whitelist = []/' cog.toml > "${cfg}"
+          cog --config "${cfg}" bump --version "${VERSION}"
+
+          if [ "$(git tag --points-at HEAD | grep -x "${TAG}" || true)" != "${TAG}" ]; then
+            echo "::error::cog bump did not create ${TAG} on HEAD"
+            exit 1
+          fi
+
+          git push origin HEAD:main
+          git push origin "${TAG}"
+          echo "::notice::cut ${TAG}"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
   # ----------------------------------------------------------------
   # Build the `.crate` once. github-release attaches these bytes;
   # publish later uploads the same tree to crates.io.
@@ -43,12 +145,15 @@ jobs:
     name: Package crate
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: [bump]
+    env:
+      TAG: ${{ needs.bump.outputs.tag }}
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.bump.outputs.tag }}
           persist-credentials: false
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -85,7 +190,9 @@ jobs:
     name: Create GitHub release
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [package]
+    needs: [bump, package]
+    env:
+      TAG: ${{ needs.bump.outputs.tag }}
     # id-token + attestations so cosign keyless +
     # actions/attest-build-provenance can mint an OIDC token and write
     # to the GitHub attestation store.
@@ -96,7 +203,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.bump.outputs.tag }}
           persist-credentials: false
 
       - name: Download .crate artifact
@@ -189,7 +296,9 @@ jobs:
   verify-release:
     name: Verify signed release
     runs-on: ubuntu-latest
-    needs: [github-release]
+    needs: [bump, github-release]
+    env:
+      TAG: ${{ needs.bump.outputs.tag }}
     permissions:
       contents: read
       id-token: write
@@ -215,8 +324,10 @@ jobs:
           set -euo pipefail
           cd verify
           # Identity regex pins the signature to a run of THIS repo's
-          # release.yml. Tag-push runs sign as @refs/tags/vX.Y.Z;
-          # workflow_dispatch re-releases sign as @refs/heads/main.
+          # release.yml. Manual releases sign as @refs/heads/main.
+          # Historical tag-push releases (through v0.11.1) signed as
+          # @refs/tags/vX.Y.Z; keep that alternative so those assets
+          # still verify.
           IDENTITY_RE='^https://github\.com/outbe/outbe-poseidon/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+)$'
           OIDC_ISSUER='https://token.actions.githubusercontent.com'
           failed=0
@@ -256,13 +367,15 @@ jobs:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [verify-release]
+    needs: [bump, verify-release]
+    env:
+      TAG: ${{ needs.bump.outputs.tag }}
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.bump.outputs.tag }}
           persist-credentials: false
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
