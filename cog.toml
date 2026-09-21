@@ -20,6 +20,9 @@ generate_mono_repository_global_tag = false
 # between the tag and the artifact's self-reported version.
 pre_bump_hooks = [
     "sed -i '0,/^version/{s/^version.*/version = \"{{version}}\"/}' Cargo.toml",
+    # Cargo.lock is committed; keep the root package version in lockstep
+    # so release.yml's `cargo package --locked` still resolves.
+    "sed -i '/^name = \"outbe-poseidon\"$/{n;s/^version = \".*\"/version = \"{{version}}\"/;}' Cargo.lock",
 ]
 
 # After cog bumps the version + writes the tag, push both back to
