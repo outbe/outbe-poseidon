@@ -10,7 +10,7 @@ For each release ≥ the cutoff, the following files ship alongside the regular 
 
 | File | What it is |
 |---|---|
-| `outbe-poseidon-X.Y.Z.crate` | The byte-identical .crate uploaded to crates.io and attached to the GitHub Release. |
+| `outbe-poseidon-X.Y.Z.crate` | The packaged .crate attached to the GitHub Release and then uploaded to crates.io. |
 | `outbe-poseidon-X.Y.Z.crate.sig` | cosign blob signature (raw, base64). |
 | `outbe-poseidon-X.Y.Z.crate.pem` | Fulcio-issued ephemeral signing cert (PEM). |
 | `SHA256SUMS` | SHA-256 of the .crate. |
@@ -25,13 +25,13 @@ The signing pipeline protects against:
 - **Tampered binaries on the Release page.** A re-uploaded `.crate` or `SHA256SUMS` won't verify against the original cert + sig.
 - **A compromised crates.io API token.** The same maintainer who can `cargo publish` cannot mint a sigstore signature whose Fulcio cert identity matches `https://github.com/outbe/outbe-poseidon/.github/workflows/release.yml@refs/heads/main` (a `workflow_dispatch` re-release) or `@refs/tags/vX.Y.Z` (the cog tag-push flow). Those identities are only obtainable from inside a GitHub Actions run of this repo's `release.yml` workflow.
 - **A forged or locally rebuilt release artifact.** Same identity pin as above.
-- **A typo or mis-targeted action update** silently weakening verification. The post-publish `verify-release` job hard-fails the workflow on any bad signature; an upstream change that breaks the cosign sign-blob flow is visible immediately.
+- **A typo or mis-targeted action update** silently weakening verification. The `verify-release` job hard-fails the workflow on any bad signature before crates.io upload; an upstream change that breaks the cosign sign-blob flow is visible immediately.
 
 It does **not** protect against:
 
 - A compromise of `github.com/outbe/outbe-poseidon` itself (an attacker with push access to `main` can edit the workflow to remove or weaken signing).
 - A compromise of the sigstore public-good trust root (Fulcio CA, Rekor transparency log). The verify recipe trusts sigstore's TUF root by default.
-- Tampering with the crates.io copy of the tarball. crates.io has no first-party signing channel; the GH-Release-attached `.crate` is byte-identical to the crates.io upload, so a paranoid consumer can `cargo fetch`, hash, and compare against `SHA256SUMS`.
+- Tampering with the crates.io copy of the tarball. crates.io has no first-party signing channel; the GH-Release-attached `.crate` is packaged from the same tagged tree that `cargo publish` uploads, so a paranoid consumer can `cargo fetch`, hash, and compare against `SHA256SUMS`.
 - Existing (pre-cutoff) releases. Those are **not** retroactively signed — see [the spec's D10 rationale](https://github.com/outbe/outbe-poseidon/blob/main/SECURITY.md#retroactive-signing).
 
 ### Verification recipe
@@ -64,7 +64,7 @@ cosign verify-blob \
 gh attestation verify "$ARTIFACT" --repo "$REPO"
 ```
 
-Repeat for `SHA256SUMS` (and any other artifact) to verify the whole release set. CI's own `verify-release` job runs the same loop on every published release; a green `verify-release` is your signal that the regex above is the correct one for that release.
+Repeat for `SHA256SUMS` (and any other artifact) to verify the whole release set. CI's own `verify-release` job runs the same loop on every GitHub Release before crates.io upload; a green `verify-release` is your signal that the regex above is the correct one for that release.
 
 ### Retroactive signing
 
@@ -122,7 +122,7 @@ After the crate exists, owners can switch the job to [Trusted Publishing](https:
 
 1. **Settings → Secrets and variables → Actions** lists `RELEASE_TOKEN` and `CARGO_REGISTRY_TOKEN`.
 2. `RELEASE_TOKEN` is read on the next push to `main` that is not a `chore(version):` commit. A missing value fails the `bump` job with a pointer back here.
-3. `CARGO_REGISTRY_TOKEN` is read by `release.yml`. The first publish is the next `feat`/`fix` merge to `main` (cog cuts a tag and `release.yml` publishes) or **Actions → release → Run workflow** with `tag` set to an existing `v*` tag that is not yet on crates.io (for example `v0.11.0`).
+3. `CARGO_REGISTRY_TOKEN` is read by `release.yml`'s `publish` job, which runs after the signed GitHub Release verifies. The first publish is the next `feat`/`fix` merge to `main` (cog cuts a tag and `release.yml` publishes) or **Actions → release → Run workflow** with `tag` set to an existing `v*` tag that is not yet on crates.io (for example `v0.11.0`).
 
 ## Reporting vulnerabilities
 
