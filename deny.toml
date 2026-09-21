@@ -20,12 +20,7 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = [
-    # `paste` is pulled transitively by ark-ff 0.5.0. Keep this
-    # temporary until we can migrate ark-ff/ark-bn254 to 0.6.x, where
-    # the dependency on `paste` has been removed.
-    { id = "RUSTSEC-2024-0436", reason = "Transitive via ark-ff 0.5.0; blocked on arkworks 0.6 migration." },
-]
+ignore = []
 
 [licenses]
 version = 2
@@ -50,7 +45,14 @@ confidence-threshold = 0.93
 multiple-versions = "deny"
 wildcards = "deny"
 deny = []
-skip = []
+skip = [
+    # arkworks 0.6 (ark-ff-asm / ark-ff-macros / ark-serialize-derive /
+    # educe) still compiles against syn 2, while thiserror 2.0.20 and
+    # enum-ordinalize-derive 4.4 (pulled by educe) moved to syn 3.
+    # Cargo.lock is gitignored, so CI resolves the latest graph every
+    # run. Drop this once ark-* migrates to syn 3.
+    { crate = "syn", reason = "arkworks 0.6 stays on syn 2; thiserror 2.0.20 and enum-ordinalize-derive 4.4 need syn 3." },
+]
 
 [sources]
 unknown-registry = "deny"
