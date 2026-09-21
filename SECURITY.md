@@ -10,7 +10,7 @@ For each release ≥ the cutoff, the following files ship alongside the regular 
 
 | File | What it is |
 |---|---|
-| `outbe-poseidon-X.Y.Z.crate` | The .crate packaged from the tagged source and attached to the GitHub Release. |
+| `outbe-poseidon-X.Y.Z.crate` | The byte-identical .crate uploaded to crates.io and attached to the GitHub Release. |
 | `outbe-poseidon-X.Y.Z.crate.sig` | cosign blob signature (raw, base64). |
 | `outbe-poseidon-X.Y.Z.crate.pem` | Fulcio-issued ephemeral signing cert (PEM). |
 | `SHA256SUMS` | SHA-256 of the .crate. |
@@ -23,14 +23,15 @@ Build-provenance attestations are not attached to the Release — they live in G
 The signing pipeline protects against:
 
 - **Tampered binaries on the Release page.** A re-uploaded `.crate` or `SHA256SUMS` won't verify against the original cert + sig.
-- **A forged or locally rebuilt release artifact.** A maintainer cannot mint a sigstore signature whose Fulcio cert identity matches `https://github.com/outbe/outbe-poseidon/.github/workflows/ci.yml@refs/heads/main` (the cog flow) or `@refs/tags/vX.Y.Z` (a manual tag-push re-release). Those identities are only obtainable from inside a GitHub Actions run of this repo's `ci.yml` workflow.
-- **A typo or mis-targeted action update** silently weakening verification. The post-release `verify-release` job hard-fails the workflow on any bad signature; an upstream change that breaks the cosign sign-blob flow is visible immediately.
+- **A compromised crates.io API token.** The same maintainer who can `cargo publish` cannot mint a sigstore signature whose Fulcio cert identity matches `https://github.com/outbe/outbe-poseidon/.github/workflows/ci.yml@refs/heads/main` (a `workflow_dispatch` re-release) or `@refs/tags/vX.Y.Z` (the cog tag-push flow). Those identities are only obtainable from inside a GitHub Actions run of this repo's `ci.yml` workflow.
+- **A forged or locally rebuilt release artifact.** Same identity pin as above.
+- **A typo or mis-targeted action update** silently weakening verification. The post-publish `verify-release` job hard-fails the workflow on any bad signature; an upstream change that breaks the cosign sign-blob flow is visible immediately.
 
 It does **not** protect against:
 
 - A compromise of `github.com/outbe/outbe-poseidon` itself (an attacker with push access to `main` can edit the workflow to remove or weaken signing).
 - A compromise of the sigstore public-good trust root (Fulcio CA, Rekor transparency log). The verify recipe trusts sigstore's TUF root by default.
-- Consumers installing code from somewhere other than the signed GitHub Release. The Release-attached `.crate` is the reference artifact; third-party copies need to be compared against its signature or `SHA256SUMS`.
+- Tampering with the crates.io copy of the tarball. crates.io has no first-party signing channel; the GH-Release-attached `.crate` is byte-identical to the crates.io upload, so a paranoid consumer can `cargo fetch`, hash, and compare against `SHA256SUMS`.
 - Existing (pre-cutoff) releases. Those are **not** retroactively signed — see [the spec's D10 rationale](https://github.com/outbe/outbe-poseidon/blob/main/SECURITY.md#retroactive-signing).
 
 ### Verification recipe
@@ -63,13 +64,65 @@ cosign verify-blob \
 gh attestation verify "$ARTIFACT" --repo "$REPO"
 ```
 
-Repeat for `SHA256SUMS` (and any other artifact) to verify the whole release set. CI's own `verify-release` job runs the same loop on every GitHub release; a green `verify-release` is your signal that the regex above is the correct one for that release.
+Repeat for `SHA256SUMS` (and any other artifact) to verify the whole release set. CI's own `verify-release` job runs the same loop on every published release; a green `verify-release` is your signal that the regex above is the correct one for that release.
 
 ### Retroactive signing
 
 Releases tagged **before** the cutoff are not signed. Backfilling would mint signatures whose Fulcio identity reads "a manual workflow_dispatch on YYYY-MM-DD by a maintainer," not "a tag-triggered run of the original release," which is weaker provenance than the absence of a signature — and potentially misleading to consumers who don't read the fine print. The next cog bump on the repo supersedes the unsigned release for any new consumer.
 
-If you need to verify an unsigned release (≤ v0.3.1), you're out of band — rebuild the package from the tag and compare the `.crate`, or pin to a signed release.
+If you need to verify an unsigned release (≤ v0.3.1), you're out of band — diff the `.crate` against the crates.io copy or pin to a signed release.
+
+## CI secrets
+
+Release automation in `.github/workflows/ci.yml` needs two repository secrets. Set them at **Settings → Secrets and variables → Actions → New repository secret** on `outbe/outbe-poseidon`. Organization secrets also work if this repo is in the selected set.
+
+Do not put either value in the workflow file, in `Cargo.toml`, or in a commit.
+
+### `RELEASE_TOKEN`
+
+A GitHub personal access token used by the `bump` job to push the version commit to `main` and the `v*` tag. The default `GITHUB_TOKEN` cannot do this job:
+
+- Branch rulesets typically block `github-actions[bot]` from pushing to `main`.
+- A push authenticated with `GITHUB_TOKEN` never starts another workflow, so the tag would never trigger the crates.io / GitHub Release path.
+
+Create the token as a user who is allowed to push to `main` (add that user to the ruleset bypass list if `main` is protected).
+
+Classic PAT (simplest):
+
+1. GitHub → **Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token**.
+2. Scopes: `repo` (private repo contents + tags) and `workflow` (so the tag push is allowed to start `ci.yml`).
+3. Copy the token once. Store it as repository secret `RELEASE_TOKEN`.
+
+Fine-grained PAT:
+
+1. Resource owner: the `outbe` org (org owner must approve).
+2. Only this repository.
+3. Permissions: **Contents: Read and write**, **Workflows: Read and write**.
+4. Same bypass-list requirement as above.
+
+Rotate it if it leaks. After rotation, update the repository secret in place; no workflow change is needed.
+
+### `CARGO_REGISTRY_TOKEN`
+
+A crates.io API token used by the `publish` job. Trusted Publishing cannot be used for the first upload of a new crate name; this token is the bootstrap path.
+
+1. Sign in at [crates.io](https://crates.io/) with the GitHub account that should own `outbe-poseidon`.
+2. Verify the account email under [Account Settings](https://crates.io/settings/profile).
+3. Create a token at [API tokens](https://crates.io/settings/tokens):
+   - First publish of this crate: enable **publish-new** and **publish-update**.
+   - After 0.11.0 (or whichever version lands first) is on crates.io: **publish-update** is enough.
+4. Copy the token once. Store it as repository secret `CARGO_REGISTRY_TOKEN`.
+5. The GitHub user who publishes first becomes the crates.io owner. Add teammates with `cargo owner --add <github-username>` (or `github:outbe:<team>`).
+
+Revoke the token on crates.io if it leaks, then put the replacement in the same secret name.
+
+After the crate exists, owners can switch the job to [Trusted Publishing](https://crates.io/docs/trusted-publishing) (OIDC, no long-lived token) and delete `CARGO_REGISTRY_TOKEN`. Until then the secret is required; the `publish` job fails closed if it is missing.
+
+### Check that both secrets are present
+
+1. **Settings → Secrets and variables → Actions** lists `RELEASE_TOKEN` and `CARGO_REGISTRY_TOKEN`.
+2. `RELEASE_TOKEN` is read on the next push to `main` that is not a `chore(version):` commit. A missing value fails the `bump` job with a pointer back here.
+3. `CARGO_REGISTRY_TOKEN` is read on the release path. The first publish is the next `feat`/`fix` merge to `main` (cog cuts a tag and the tag-push run publishes) or **Actions → CI → Run workflow** with `tag` set to an existing `v*` tag that is not yet on crates.io (for example `v0.11.0`).
 
 ## Reporting vulnerabilities
 

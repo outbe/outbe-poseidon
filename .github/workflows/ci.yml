@@ -1,13 +1,20 @@
 name: CI
 
 # Triggers
-#   push:main         full pipeline incl. cog auto-bump + package + github-release
-#   push:tags:["v*"]  release-only path; skip lint/test/build, run package + github-release
-#                     against the named tag
-#   pull_request      lint/test/build/cargo-deny only — no release work
+#   push:main         lint/test/build + cog auto-bump. The bump job pushes the
+#                     `v*` tag with RELEASE_TOKEN so this workflow re-runs on
+#                     the tag (the default GITHUB_TOKEN cannot start that run).
+#   push:tags:["v*"]  release-only path; skip lint/test/build, publish to
+#                     crates.io, cut the signed GitHub Release
+#   pull_request      lint/test/build/cargo-deny + version preview
 #   schedule          nightly cargo-deny at 04:00 UTC to surface fresh advisories
-#   workflow_dispatch maintainer-named (re-)release; empty `tag` input runs the normal
-#                     main pipeline
+#   workflow_dispatch maintainer-named (re-)release; empty `tag` input runs the
+#                     normal main pipeline
+#
+# Secrets (see SECURITY.md):
+#   RELEASE_TOKEN          PAT that can push to main (bypass ruleset) and whose
+#                          tag push is allowed to start workflows
+#   CARGO_REGISTRY_TOKEN   crates.io API token (publish-new + publish-update)
 
 on:
   push:
@@ -253,84 +260,194 @@ jobs:
           if-no-files-found: ignore
 
   # ----------------------------------------------------------------
-  # Version bump + tag. Runs after every check on `push: main` (PR
-  # runs and tag-push runs skip). Cog inspects the conventional-
-  # commit log since the last tag and creates a `chore(version):
-  # vX.Y.Z` commit + matching tag if `feat/fix/breaking` commits
-  # have landed.
+  # Versioning (cocogitto). See cog.toml.
+  #
+  # Pull requests only: report the version a merge would cut, tagging
+  # nothing. The history predates Conventional Commits, so the check
+  # covers the range the pull request introduces rather than the
+  # whole log. Mirrors outbe-circuits.
   # ----------------------------------------------------------------
-  tag:
-    name: Bump version & tag
+  preview-version:
+    name: preview next version
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    needs: [resolve, lint, test, build]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cocogitto
+
+      - name: Validate the commits this pull request adds
+        run: >-
+          cog check --ignore-merge-commits
+          "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+      - name: Preview the bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Neutralise cog.toml's branch_whitelist for this read-only
+          # preview so it runs from a pull-request ref. Nothing is
+          # committed or tagged.
+          cfg="$(mktemp -d)/cog.toml"
+          sed 's/^branch_whitelist.*/branch_whitelist = []/' cog.toml > "$cfg"
+          if out="$(cog --config "$cfg" bump --auto --dry-run --skip-untracked 2>/dev/null)"; then
+            tag="$(printf '%s\n' "$out" | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+[0-9A-Za-z.+-]*' | tail -n1 || true)"
+            echo "::notice::next release would be: ${tag:-<no bump warranted>}"
+          else
+            echo "::notice::no bump warranted"
+          fi
+
+  # ----------------------------------------------------------------
+  # main only, once every gate is green: cut the next v* tag, then
+  # push the bump commit and the tag through cog.toml's post-bump
+  # hooks. The push uses RELEASE_TOKEN so the owner bypasses the
+  # branch ruleset; that also lets the tag push start this workflow's
+  # release path, which the default GITHUB_TOKEN cannot do.
+  # Mirrors outbe-circuits.
+  # ----------------------------------------------------------------
+  bump:
+    name: bump version & tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [resolve, cargo-deny, lint, test, build]
     if: |
       needs.resolve.outputs.release_tag == '' &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       !startsWith(github.event.head_commit.message, 'chore(version):') &&
       !contains(github.event.head_commit.message, '[skip ci]')
-    outputs:
-      tag: ${{ steps.bump.outputs.tag }}
     steps:
+      - name: Require RELEASE_TOKEN
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "${RELEASE_TOKEN}" ]; then
+            echo "::error::RELEASE_TOKEN is not set. See SECURITY.md (CI secrets)."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_TOKEN }}
 
-      - name: Configure git identity
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cocogitto
+
+      - name: Configure the committer
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Cocogitto bump
-        uses: cocogitto/cocogitto-action@v4
-        with:
-          command: bump
-          args: --auto
-          git-user: "github-actions[bot]"
-          git-user-email: "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Validate the new commit
+        run: cog check --ignore-merge-commits "HEAD^..HEAD"
 
-      - name: Resolve created tag (if any)
-        id: bump
+      - name: Cocogitto bump
+        shell: bash
         run: |
           set -euo pipefail
+          # cog does not see the CI checkout as `main`, so its own
+          # branch_whitelist guard would reject the bump. The job `if:`
+          # above is what restricts this to a push on main. Every hook
+          # from cog.toml is preserved and runs with the checkout
+          # credentials (RELEASE_TOKEN).
+          cfg="$(mktemp -d)/cog.toml"
+          sed 's/^branch_whitelist.*/branch_whitelist = []/' cog.toml > "$cfg"
+          cog --config "$cfg" bump --auto
           tag="$(git tag --points-at HEAD | grep '^v' | head -n1 || true)"
-          echo "tag=${tag}"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if [ -n "$tag" ]; then
+            echo "::notice::cut ${tag}; the tag push starts the publish + github-release jobs"
+          else
+            echo "::notice::no bump warranted"
+          fi
 
   # ----------------------------------------------------------------
-  # Package (cog flow). Fires on (a) a fresh cog-pushed tag in the
-  # run above, or (b) a manual tag push / workflow_dispatch with
-  # `tag` input. The "no new bump" case (tag job runs but creates no
-  # tag) cleanly short-circuits via the `tag.outputs.tag != ''` guard.
+  # Publish (tag-push / workflow_dispatch). Fires when resolve has a
+  # release_tag: a `v*` tag landing (normally from the bump job) or a
+  # maintainer-named re-release. The bump run itself does not publish
+  # — that would double-fire once RELEASE_TOKEN's tag push starts this
+  # workflow again.
   # ----------------------------------------------------------------
-  package:
-    name: Package release artifact
+  publish:
+    name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: [resolve, tag]
-    if: |
-      always() &&
-      (
-        (needs.tag.result == 'success' && needs.tag.outputs.tag != '') ||
-        needs.resolve.outputs.release_tag != ''
-      )
+    timeout-minutes: 20
+    needs: [resolve]
+    if: needs.resolve.outputs.release_tag != ''
     steps:
       - uses: actions/checkout@v4
         with:
-          # Check out the freshly-created tag (or the manually-named
-          # one) so cargo package ships the bumped Cargo.toml the
-          # `tag` job's cog run wrote, not the pre-bump HEAD.
-          ref: ${{ needs.tag.outputs.tag || needs.resolve.outputs.release_tag }}
+          # Check out the named tag so cargo publish ships the bumped
+          # Cargo.toml the bump job's cog run wrote, not a stale SHA.
+          ref: ${{ needs.resolve.outputs.release_tag }}
+
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: cargo
 
-      - name: Package .crate for artifact upload
-        run: cargo package --verbose
+      - name: The tag and the manifest agree
+        env:
+          TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          manifest="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ "v${manifest}" != "$TAG" ]; then
+            echo "::error::tag ${TAG} but Cargo.toml says ${manifest}; cog's pre-bump hook did not run"
+            exit 1
+          fi
+          echo "::notice::${TAG} matches the package manifest"
 
-      # Upload the `.crate` as a workflow artifact so
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN}" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is not set. See SECURITY.md (CI secrets)."
+            exit 1
+          fi
+          version="${TAG#v}"
+          # Re-cutting a GitHub Release for an already-published version
+          # must not fail the rest of the pipeline on crates.io's
+          # "already uploaded" error. crates.io requires a User-Agent.
+          status="$(curl -sS -o /tmp/crate.json -w '%{http_code}' \
+            -A 'outbe-poseidon-ci (https://github.com/outbe/outbe-poseidon)' \
+            "https://crates.io/api/v1/crates/outbe-poseidon/${version}")"
+          case "$status" in
+            200)
+              echo "::notice::outbe-poseidon@${version} already on crates.io; skipping publish"
+              ;;
+            404)
+              cargo publish --verbose --token "${CARGO_REGISTRY_TOKEN}"
+              ;;
+            *)
+              echo "::error::crates.io lookup failed (HTTP ${status})"
+              cat /tmp/crate.json || true
+              exit 1
+              ;;
+          esac
+
+      # Re-create the .crate locally. `cargo publish` cleans up
+      # target/package/*.crate after a successful upload; `cargo
+      # package --no-verify` is fast (skips the re-build) and
+      # deterministic given the same source tree, so the resulting
+      # bytes match what crates.io just received (or would receive).
+      - name: Re-package .crate for artifact upload
+        if: success()
+        run: cargo package --no-verify
+
+      # Upload the byte-identical `.crate` as a workflow artifact so
       # the `github-release` job can attach it to the GH Release
-      # and sign the same bytes that consumers can download.
+      # alongside the crates.io copy. Signing produces one sigstore
+      # signature that verifies both.
       - name: Upload .crate as workflow artifact
         if: success()
         uses: actions/upload-artifact@v4
@@ -341,20 +458,17 @@ jobs:
           retention-days: 1
 
   # ----------------------------------------------------------------
-  # GitHub release. Attaches the `.crate` (from the `package` job's
-  # workflow artifact) and a SHA256SUMS file alongside the auto-
-  # generated notes. The GH Release is the signed distribution point.
+  # GitHub release. Attaches the byte-identical `.crate` (from the
+  # `publish` job's workflow artifact) and a SHA256SUMS file
+  # alongside the auto-generated notes. crates.io is the canonical
+  # install channel; the GH Release is the signed distribution point.
   # ----------------------------------------------------------------
   github-release:
     name: Create GitHub release
     runs-on: ubuntu-latest
-    needs: [resolve, tag, package]
-    if: |
-      always() &&
-      (
-        (needs.tag.result == 'success' && needs.tag.outputs.tag != '') ||
-        needs.resolve.outputs.release_tag != ''
-      )
+    timeout-minutes: 20
+    needs: [resolve, publish]
+    if: needs.resolve.outputs.release_tag != '' && needs.publish.result == 'success'
     # id-token + attestations widen this job's scope so cosign keyless +
     # actions/attest-build-provenance can mint an OIDC token and write to
     # the GitHub attestation store. Workflow-level perms stay narrower.
@@ -365,17 +479,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.tag.outputs.tag || needs.resolve.outputs.release_tag }}
+          ref: ${{ needs.resolve.outputs.release_tag }}
 
       - name: Download .crate artifact
-        if: needs.package.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: crate-tarball
           path: dist/
 
       - name: Generate SHA256SUMS
-        if: needs.package.result == 'success'
         run: |
           set -euo pipefail
           cd dist
@@ -384,7 +496,6 @@ jobs:
           cat SHA256SUMS
 
       - name: Install cosign
-        if: needs.package.result == 'success'
         uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # pin-target: v3
 
       # Keyless OIDC sign-blob over every staged artifact (.crate +
@@ -392,7 +503,6 @@ jobs:
       # issued ephemeral cert). Skips files that are themselves a sig
       # or cert so a re-run is idempotent.
       - name: Sign release artifacts (cosign keyless)
-        if: needs.package.result == 'success'
         run: |
           set -euo pipefail
           cd dist
@@ -412,7 +522,6 @@ jobs:
       # verify`); the local DSSE bundle is also captured for users who
       # want offline verification via `cosign verify-blob-attestation`.
       - name: Generate SLSA build provenance
-        if: needs.package.result == 'success'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # pin-target: v2
         with:
           subject-path: |
@@ -421,18 +530,18 @@ jobs:
 
       - name: Compose release body
         env:
-          TAG: ${{ needs.tag.outputs.tag || needs.resolve.outputs.release_tag }}
-          PACKAGE_RESULT: ${{ needs.package.result }}
+          TAG: ${{ needs.resolve.outputs.release_tag }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
         run: |
           set -euo pipefail
           {
             echo "## Install"
             echo
-            echo "    cargo add outbe-poseidon --git https://github.com/outbe/outbe-poseidon --tag ${TAG}"
+            echo "    cargo add outbe-poseidon@${TAG#v}"
             echo
             echo "## Artifacts"
             echo
-            echo "- \`outbe-poseidon-${TAG#v}.crate\` — packaged from the tagged source."
+            echo "- \`outbe-poseidon-${TAG#v}.crate\` — byte-identical to the crates.io upload."
             echo "- \`SHA256SUMS\` — SHA-256 of the .crate."
             echo "- \`*.sig\` + \`*.pem\` — sigstore cosign keyless signature + Fulcio cert per artifact."
             echo
@@ -442,15 +551,15 @@ jobs:
             echo
             echo "## CI"
             echo
-            echo "- package artifact: ${PACKAGE_RESULT}"
+            echo "- crates.io publish: ${PUBLISH_RESULT}"
           } > RELEASE_BODY.md
           cat RELEASE_BODY.md
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.tag.outputs.tag || needs.resolve.outputs.release_tag }}
-          name: ${{ needs.tag.outputs.tag || needs.resolve.outputs.release_tag }}
+          tag_name: ${{ needs.resolve.outputs.release_tag }}
+          name: ${{ needs.resolve.outputs.release_tag }}
           body_path: RELEASE_BODY.md
           generate_release_notes: true
           fail_on_unmatched_files: false
@@ -461,7 +570,7 @@ jobs:
             dist/SHA256SUMS
 
   # ----------------------------------------------------------------
-  # verify-release: post-release smoke test. Re-downloads every asset
+  # verify-release: post-publish smoke test. Re-downloads every asset
   # of the release we just cut and runs `cosign verify-blob` against
   # each one. Hard-fails the workflow on any bad signature — this is
   # the regression test for both the action SHA pins and the cert-
@@ -472,15 +581,11 @@ jobs:
   verify-release:
     name: Verify signed release
     runs-on: ubuntu-latest
-    needs: [resolve, tag, package, github-release]
+    needs: [resolve, publish, github-release]
     if: |
-      always() &&
-      needs.github-release.result == 'success' &&
-      needs.package.result == 'success' &&
-      (
-        (needs.tag.result == 'success' && needs.tag.outputs.tag != '') ||
-        needs.resolve.outputs.release_tag != ''
-      )
+      needs.resolve.outputs.release_tag != '' &&
+      needs.publish.result == 'success' &&
+      needs.github-release.result == 'success'
     permissions:
       contents: read
       id-token: write
@@ -492,7 +597,7 @@ jobs:
 
       - name: Download release assets
         env:
-          TAG: ${{ needs.tag.outputs.tag || needs.resolve.outputs.release_tag }}
+          TAG: ${{ needs.resolve.outputs.release_tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -502,7 +607,7 @@ jobs:
 
       - name: Verify cosign signatures
         env:
-          TAG: ${{ needs.tag.outputs.tag || needs.resolve.outputs.release_tag }}
+          TAG: ${{ needs.resolve.outputs.release_tag }}
         run: |
           set -euo pipefail
           cd verify
