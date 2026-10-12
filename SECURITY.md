@@ -39,21 +39,22 @@ It does **not** protect against:
 You need [cosign](https://docs.sigstore.dev/cosign/installation/) and [`gh`](https://cli.github.com/) on `$PATH`.
 
 ```sh
-# Pick a signed release.
+# Select a signed release.
 REPO=outbe/outbe-poseidon
-TAG=v0.3.5  # or any release ≥ the cutoff
+TAG=v0.3.5  # You can use any release from v0.3.5 onward.
 ARTIFACT=outbe-poseidon-${TAG#v}.crate
 
-# Download the artifact + its sig + cert.
+# Download the artifact, its signature, and its certificate.
 gh release download "$TAG" --repo "$REPO" \
   --pattern "$ARTIFACT" \
   --pattern "$ARTIFACT.sig" \
   --pattern "$ARTIFACT.pem"
 
-# Verify. The --certificate-identity-regexp pins the signer to a
-# run of THIS repo's release.yml. Manual releases sign as
-# @refs/heads/main; releases through v0.11.1 also signed as
-# @refs/tags/vX.Y.Z. Any mismatch is a fail.
+# Check the signature.
+# The --certificate-identity-regexp option requires a signer from this repository's release.yml.
+# Manual releases sign as @refs/heads/main.
+# Releases through v0.11.1 also signed as @refs/tags/vX.Y.Z.
+# Any mismatch causes the check to fail.
 cosign verify-blob \
   --certificate "$ARTIFACT.pem" \
   --signature   "$ARTIFACT.sig" \
@@ -62,7 +63,7 @@ cosign verify-blob \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "$ARTIFACT"
 
-# Optional: also verify the SLSA build-provenance attestation.
+# Optionally, check the SLSA attestation for build provenance.
 gh attestation verify "$ARTIFACT" --repo "$REPO"
 ```
 

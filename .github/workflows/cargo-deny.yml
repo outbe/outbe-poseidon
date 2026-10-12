@@ -1,8 +1,8 @@
 name: cargo-deny
 
-# Nightly advisory scan, split out of ci.yml so GitHub disabling this
-# scheduled workflow (inactivity or 14 consecutive failures) cannot
-# take pull-request checks down with it.
+# This nightly advisory scan runs separately from the pull request checks.
+# GitHub can disable this scheduled workflow after inactivity or 14 consecutive failures.
+# Pull request checks can still run if GitHub disables this workflow.
 on:
   schedule:
     - cron: "0 4 * * *"

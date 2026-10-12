@@ -6,35 +6,35 @@
 
 <!-- cargo-rdme start -->
 
-**outbe-poseidon** is a [Poseidon](https://eprint.iacr.org/2019/458) hash
-implementation in Rust created for [Outbe](https://github.com/outbe) based on [light-poseidon](https://github.com/Lightprotocol/light-poseidon/) library.
+**outbe-poseidon** implements the [Poseidon](https://eprint.iacr.org/2019/458)
+hash in Rust for [Outbe](https://github.com/outbe).
+It uses the [light-poseidon](https://github.com/Lightprotocol/light-poseidon/)
+library as its basis.
 
 ## Parameters
 
-The library provides pre-generated parameters over the BN254 curve, however
-it can work with any parameters provided as long as developers take care
-of generating the round constants.
+The library provides pre-generated parameters for the BN254 curve.
+It also supports other parameters if developers generate the round constants.
 
-Parameters provided by the library are:
+The library provides these parameters:
 
 * *x^5* S-boxes
-* width - *2 ≤ t ≤ 13*
-* inputs - *1 ≤ n ≤ 12*
-* 8 full rounds and partial rounds depending on *t*: *[56, 57, 56, 60, 60, 63, 64, 63, 60, 66, 60, 65]*
+* Width: *2 ≤ t ≤ 13*
+* Number of inputs: *1 ≤ n ≤ 12*
+* Number of full rounds: 8
+* Number of partial rounds for each *t*: *[56, 57, 56, 60, 60, 63, 64, 63, 60, 66, 60, 65]*
 
 ## Output type
 
-`Poseidon` type implements two traits which serve the purpose
-of returning the calculated hash in different representations:
-
-* `PoseidonHasher` with the `hash` method which returns
-  `ark_ff::PrimeField`. Might be useful if you want
-  to immediately process the result with an another library which works with
-  `ark_ff::PrimeField` types.
+`Poseidon` implements the `PoseidonHasher` trait.
+Its `hash` method returns a field element of a type that implements
+`ark_ff::PrimeField`.
+This result might be useful for immediate processing with another library
+that supports `ark_ff::PrimeField` types.
 
 ## Examples
 
-With `PoseidonHasher` trait and `ark_ff::PrimeField` result:
+This example uses `PoseidonHasher` to return an `ark_ff::PrimeField` element:
 
 ```rust
 use ark_bn254::Fr;
@@ -48,17 +48,20 @@ let input2 = Fr::from_le_bytes_mod_order(&[2u8; 32]);
 
 let hash = poseidon.hash(&[input1, input2]).unwrap();
 
-// Do something with `hash`.
+// Use `hash` in your application.
 ```
 
 ## Poseidon2
 
-`Poseidon2` is a separate, generic BN254 **Poseidon2** hash, bit-compatible
-with noir's in-circuit `poseidon2` (Barretenberg's permutation + sponge). Use
-it for off-circuit hashing that must reproduce an in-circuit Poseidon2 result.
-It shares no parameters with the circom-compatible `Poseidon` above —
-Poseidon2 is a distinct construction. BN254 is built in via
-`Poseidon2::<Fr>::new()`; other fields supply their own constants.
+`Poseidon2` implements a separate, generic **Poseidon2** hash with BN254 support.
+Its output matches Noir's in-circuit `poseidon2` bit for bit.
+It uses Barretenberg's permutation and sponge.
+Use it outside a circuit when the hash must match a Poseidon2 result from a circuit.
+
+Poseidon2 uses a different construction from the Circom-compatible `Poseidon`.
+The two implementations share no parameters.
+`Poseidon2::<Fr>::new()` provides BN254 support.
+Other fields require their own constants.
 
 ```rust
 use ark_bn254::Fr;
@@ -70,13 +73,20 @@ let _hash = poseidon2.hash(&[Fr::from(1u64), Fr::from(2u64)]).unwrap();
 
 ## Field Arithmetic
 
-This library uses [ark-ff](https://github.com/arkworks-rs/algebra) for field arithmetic. While ark-ff carries an academic disclaimer, it is widely adopted in production by major projects including [Aleo](https://github.com/AleoNet/snarkVM), [Penumbra](https://github.com/penumbra-zone/penumbra), [Mina (Kimchi)](https://github.com/o1-labs/proof-systems), and [Espresso Systems](https://github.com/EspressoSystems).
+This library uses [ark-ff](https://github.com/arkworks-rs/algebra) for field arithmetic.
+The ark-ff library includes an academic disclaimer.
+Many projects use ark-ff in production, including:
+
+* [Aleo](https://github.com/AleoNet/snarkVM)
+* [Penumbra](https://github.com/penumbra-zone/penumbra)
+* [Mina (Kimchi)](https://github.com/o1-labs/proof-systems)
+* [Espresso Systems](https://github.com/EspressoSystems)
 
 ## Implementation
 
 The implementation is compatible with the
-[original SageMath implementation](https://extgit.iaik.tugraz.at/krypto/hadeshash/-/tree/master/),
-but it was also inspired by the following ones:
+[original SageMath implementation](https://extgit.iaik.tugraz.at/krypto/hadeshash/-/tree/master/).
+These implementations also influenced its design:
 
 * [circomlibjs](https://github.com/iden3/circomlibjs)
 * [zero-knowledge-gadgets](https://github.com/webb-tools/zero-knowledge-gadgets)
@@ -84,8 +94,8 @@ but it was also inspired by the following ones:
 
 ## Security
 
-This library has been audited by [Veridise](https://veridise.com/). You can
-read the audit report [here](https://github.com/Lightprotocol/light-poseidon/blob/main/assets/audit.pdf).
+[Veridise](https://veridise.com/) audited this library.
+You can read the [audit report](https://github.com/Lightprotocol/light-poseidon/blob/main/assets/audit.pdf).
 
 <!-- cargo-rdme end -->
 

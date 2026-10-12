@@ -1,14 +1,14 @@
 name: CI
 
-# Triggers
-#   push:main         lint/test/build
-#   pull_request      lint/test/build/cargo-deny + version preview
-#   workflow_dispatch re-run the main pipeline by hand
-# Nightly cargo-deny lives in cargo-deny.yml so a disabled scheduled
-# workflow cannot take PR checks down with it.
+# Triggers:
+#   - `push:main` runs lint checks, tests, and builds.
+#   - `pull_request` runs lint checks, tests, builds, cargo-deny, and a version preview.
+#   - `workflow_dispatch` runs the main pipeline manually.
+# The nightly cargo-deny scan uses cargo-deny.yml.
+# If GitHub disables that scheduled workflow, pull request checks can still run.
 #
-# Releases are cut from release.yml (Actions → release → Run workflow)
-# with an explicit tag. This workflow does not tag or publish.
+# Create releases with an explicit tag from release.yml (Actions → release → Run workflow).
+# This workflow does not create tags or publish releases.
 
 on:
   push:
@@ -28,9 +28,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Supply-chain enforcement on every PR and push to main. The nightly
-  # advisory scan is cargo-deny.yml so consecutive schedule failures
-  # cannot disable this workflow.
+  # Check dependencies on every pull request and push to main.
+  # The nightly advisory scan uses cargo-deny.yml.
+  # Consecutive failures of that scheduled scan cannot disable this workflow.
   cargo-deny:
     name: cargo-deny
     runs-on: ubuntu-latest
@@ -77,8 +77,7 @@ jobs:
       - name: Run clippy (code smells check)
         run: |
           cargo clippy --version
-          # Run clippy with practical code smell checks
-          # Focus on catching critical issues: debug macros, unsafe patterns, etc.
+          # Run clippy to check for critical issues, including debug macros and unsafe patterns.
           cargo clippy --all-targets --all-features -- -D warnings \
             -D clippy::dbg_macro \
             -D clippy::print_stdout \
@@ -213,10 +212,10 @@ jobs:
   # ----------------------------------------------------------------
   # Versioning (cocogitto). See cog.toml.
   #
-  # Pull requests only: report the SemVer `cog bump --auto` would
-  # suggest. Releases themselves are cut by hand from release.yml.
-  # The history predates Conventional Commits, so the check covers
-  # the range the pull request introduces rather than the whole log.
+  # For pull requests, report the semantic version (SemVer) that `cog bump --auto` would suggest.
+  # Create releases manually from release.yml.
+  # The repository history starts before the use of Conventional Commits.
+  # Thus, the check covers only the commits that the pull request adds.
   # ----------------------------------------------------------------
   preview-version:
     name: preview next version
@@ -242,9 +241,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Neutralise cog.toml's branch_whitelist for this read-only
-          # preview so it runs from a pull-request ref. Nothing is
-          # committed or tagged.
+          # Clear `branch_whitelist` in the temporary config so the preview can run from a pull request ref.
+          # This preview does not create commits or tags.
           cfg="$(mktemp -d)/cog.toml"
           sed 's/^branch_whitelist.*/branch_whitelist = []/' cog.toml > "$cfg"
           if out="$(cog --config "$cfg" bump --auto --dry-run --skip-untracked 2>/dev/null)"; then
