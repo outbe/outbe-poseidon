@@ -2,16 +2,16 @@ use ark_bn254::Fr;
 use ark_ff::{BigInteger, PrimeField};
 use outbe_poseidon::{Poseidon, PoseidonError, PoseidonHasher};
 
-/// Checks the hash of byte slices consisting of ones and twos.
+/// This test checks the hash of byte slices that contain ones and twos.
 #[test]
 fn test_poseidon_bn254_x5_fq_input_ones_twos() {
-    // Use the same approach as the existing test in lib.rs
+    // Use the same method as the Poseidon unit test.
     let input1 = Fr::from_le_bytes_mod_order(&[1u8; 32]);
     let input2 = Fr::from_le_bytes_mod_order(&[2u8; 32]);
     let mut hasher = Poseidon::<Fr>::new_circom(2).unwrap();
     let hash = hasher.hash(&[input1, input2]).unwrap();
 
-    // The expected value matches the existing test (little-endian)
+    // The expected value matches the Poseidon unit test in little-endian order.
     let expected_le = [
         144, 25, 130, 41, 200, 53, 231, 38, 27, 206, 162, 156, 254, 132, 123, 32, 25, 99, 242, 85,
         3, 94, 235, 125, 28, 140, 138, 143, 147, 225, 84, 13,
@@ -20,8 +20,7 @@ fn test_poseidon_bn254_x5_fq_input_ones_twos() {
     assert_eq!(hash.into_bigint().to_bytes_le(), expected_le);
 }
 
-/// Checks the hash of bytes slices consisting of ones and twos, with a custom
-/// domain tag.
+/// This test checks a custom domain tag with byte slices that contain ones and twos.
 #[test]
 fn test_poseidon_bn254_x5_fq_with_domain_tag() {
     let input1 = Fr::from_le_bytes_mod_order(&[1u8; 32]);
@@ -29,7 +28,7 @@ fn test_poseidon_bn254_x5_fq_with_domain_tag() {
     let mut hasher = Poseidon::<Fr>::with_domain_tag_circom(2, Fr::from(0u64)).unwrap();
     let hash = hasher.hash(&[input1, input2]).unwrap();
 
-    // Expected value with zero domain tag (same as default)
+    // A zero domain tag must give the default hash value.
     let expected_tag_zero_le = [
         144, 25, 130, 41, 200, 53, 231, 38, 27, 206, 162, 156, 254, 132, 123, 32, 25, 99, 242, 85,
         3, 94, 235, 125, 28, 140, 138, 143, 147, 225, 84, 13,
@@ -39,15 +38,14 @@ fn test_poseidon_bn254_x5_fq_with_domain_tag() {
 
     let mut hasher = Poseidon::<Fr>::with_domain_tag_circom(2, Fr::from(1u64)).unwrap();
     let hash = hasher.hash(&[input1, input2]).unwrap();
-    // Should be different from zero domain tag
+    // The hash should differ from the hash with a zero domain tag.
     assert_ne!(hash.into_bigint().to_bytes_le(), expected_tag_zero_le);
 }
 
-/// Check whether providing different number of inputs than supported by the
-/// hasher results in an error.
+/// This test checks that the hasher returns an error if the input count differs from the supported count.
 #[test]
 fn test_poseidon_bn254_x5_fq_too_many_inputs() {
-    // Use simple field elements that we know work
+    // Use known valid field elements.
     let input1 = Fr::from_le_bytes_mod_order(&[1u8; 32]);
     let input2 = Fr::from_le_bytes_mod_order(&[2u8; 32]);
 
@@ -56,7 +54,7 @@ fn test_poseidon_bn254_x5_fq_too_many_inputs() {
 
         for j in 1..13 {
             if i != j {
-                // Create j inputs (alternating between input1 and input2)
+                // Create `j` inputs that alternate between `input1` and `input2`.
                 let inputs: Vec<_> = (0..j)
                     .map(|k| if k % 2 == 0 { input1 } else { input2 })
                     .collect();
@@ -67,8 +65,7 @@ fn test_poseidon_bn254_x5_fq_too_many_inputs() {
     }
 }
 
-/// Check whether creating a hasher for more than 12 inputs results in an
-/// error.
+/// This test checks that the constructor returns an error for more than 12 inputs.
 #[test]
 fn test_circom_solana_t_gt_12_fails() {
     for i in 13..16 {
@@ -83,7 +80,7 @@ fn test_circom_solana_t_gt_12_fails() {
     }
 }
 
-/// Checks whether creating a hasher for 0 inputs results in an error.
+/// This test checks that the constructor returns an error for 0 inputs.
 #[test]
 fn test_circom_t_0_fails() {
     let hasher = Poseidon::<Fr>::new_circom(0);
@@ -96,7 +93,7 @@ fn test_circom_t_0_fails() {
     }
 }
 
-/// Checks that hashing the same input twice produces the same results.
+/// This test checks that two hashes of the same input match.
 #[test]
 fn test_poseidon_bn254_x5_fq_same_input_same_results() {
     let input = Fr::from_le_bytes_mod_order(&[1u8; 32]);
@@ -116,7 +113,7 @@ fn test_poseidon_bn254_x5_fq_same_input_same_results() {
     }
 }
 
-/// Test that hashing different inputs produces different results.
+/// This test checks that different inputs give different hashes.
 #[test]
 fn test_poseidon_bn254_x5_fq_different_inputs_different_results() {
     let input1 = Fr::from_le_bytes_mod_order(&[1u8; 32]);
@@ -139,7 +136,7 @@ fn test_poseidon_bn254_x5_fq_different_inputs_different_results() {
     }
 }
 
-/// Test that hashing with different numbers of inputs produces different results.
+/// This test checks that different input counts give different hashes.
 #[test]
 fn test_poseidon_bn254_x5_fq_different_widths_different_results() {
     let input = Fr::from_le_bytes_mod_order(&[1u8; 32]);
@@ -155,7 +152,7 @@ fn test_poseidon_bn254_x5_fq_different_widths_different_results() {
         hashes.push(hash);
     }
 
-    // All hashes should be different
+    // All hashes should differ.
     for i in 0..hashes.len() {
         for j in (i + 1)..hashes.len() {
             assert_ne!(hashes[i], hashes[j]);
@@ -163,20 +160,20 @@ fn test_poseidon_bn254_x5_fq_different_widths_different_results() {
     }
 }
 
-/// Test that the hasher is deterministic - same inputs produce same output.
+/// This test checks that the same inputs give the same hash.
 #[test]
 fn test_poseidon_bn254_x5_fq_deterministic() {
-    // Use known field elements
+    // Use known field elements.
     let input1 = Fr::from_le_bytes_mod_order(&[1u8; 32]);
     let input2 = Fr::from_le_bytes_mod_order(&[2u8; 32]);
 
     for nr_inputs in 1..12 {
-        // Create inputs (alternating between input1 and input2)
+        // Create inputs that alternate between `input1` and `input2`.
         let inputs: Vec<_> = (0..nr_inputs)
             .map(|k| if k % 2 == 0 { input1 } else { input2 })
             .collect();
 
-        // Hash twice with the same inputs
+        // Calculate the hash twice with the same inputs.
         let mut hasher1 = Poseidon::<Fr>::new_circom(nr_inputs).unwrap();
         let mut hasher2 = Poseidon::<Fr>::new_circom(nr_inputs).unwrap();
 
@@ -187,41 +184,41 @@ fn test_poseidon_bn254_x5_fq_deterministic() {
     }
 }
 
-/// Test that hashing with various field elements works correctly.
+/// This test checks that the hasher accepts different field elements.
 #[test]
 fn test_poseidon_bn254_x5_fq_various_inputs() {
-    // Use various known field elements that are guaranteed to be valid
+    // Use different known valid field elements.
     let mut inputs_list = Vec::new();
 
-    // Add zero
+    // Add zero.
     inputs_list.push(Fr::from(0u64));
 
-    // Add small values (1, 2, 3, etc.)
+    // Add byte arrays with values 1 through 9 in the final byte.
     for i in 1..10 {
         let mut bytes = [0u8; 32];
         bytes[31] = i;
         inputs_list.push(Fr::from_le_bytes_mod_order(&bytes));
     }
 
-    // Add some patterns
+    // Add repeated byte patterns.
     inputs_list.push(Fr::from_le_bytes_mod_order(&[1u8; 32]));
     inputs_list.push(Fr::from_le_bytes_mod_order(&[2u8; 32]));
 
     for nr_inputs in 1..12 {
         let mut hasher = Poseidon::<Fr>::new_circom(nr_inputs).unwrap();
 
-        // Create inputs from the list (cycling through)
+        // Create inputs from the list, with repetition from the start when necessary.
         let inputs: Vec<_> = (0..nr_inputs)
             .map(|i| inputs_list[i % inputs_list.len()])
             .collect();
 
-        // Should succeed
+        // The hash calculation should succeed.
         let result = hasher.hash(&inputs);
         assert!(result.is_ok());
 
-        // Result should be a valid field element
+        // The result should be a valid field element.
         let hash = result.unwrap();
-        // Verify it's a valid hash (not necessarily non-zero, but should be consistent)
-        let _ = hash.into_bigint().to_bytes_le(); // Just verify we can convert to bytes
+        // The hash can be zero, but it should be consistent.
+        let _ = hash.into_bigint().to_bytes_le(); // Check that the hash converts to bytes.
     }
 }

@@ -1,44 +1,44 @@
 //! Poseidon2 constants for the BN254 field.
 //!
-//! Vendored verbatim from noir's `bn254_blackbox_solver::poseidon2_constants`
-//! (tag v1.0.0-beta.22) — the exact constants the in-circuit `poseidon2`
-//! permutation uses — with only the field-type wrapper adapted to ark `Fr`.
-//! Do not edit the hex values; regenerate from the matching noir release.
+//! These values exactly match Noir's `bn254_blackbox_solver::poseidon2_constants` at tag v1.0.0-beta.22.
+//! Noir's in-circuit `poseidon2` permutation uses the same constants.
+//! Only the field type wrapper differs, to use ark `Fr`.
+//! Do not edit the hexadecimal values.
+//! Generate them again from the matching Noir release.
 
 use ark_bn254::Fr;
 use ark_ff::{MontFp, PrimeField};
 
 /// Parameters and round constants for a Poseidon2 instance over the field `F`.
 ///
-/// The constants are **field-specific**: BN254's are vendored below, and a
-/// config for any other field would have to be generated for that field's
-/// modulus. Reusing one field's constants under a different field is not a
-/// valid (or secure) Poseidon2 instance.
+/// The constants depend on the field.
+/// This module includes the BN254 constants.
+/// A configuration for another field requires constants for that field's modulus.
+/// Constants from a different field do not give a valid or secure Poseidon2 instance.
 pub struct Poseidon2Config<F: PrimeField> {
-    /// State width (or state size, number of field elements in the permutation state).
-    #[allow(dead_code)] // documents the state width; the impl hardcodes t = 4.
+    /// State width (state size): the number of field elements in the permutation state.
+    #[allow(dead_code)] // This field records the width. The implementation fixes `t = 4`.
     pub t: u32,
 
-    /// Number of full rounds (also called R_F).
-    /// In full rounds, the S-box is applied to all state elements.
+    /// Number of full rounds (`R_F`).
+    /// Each full round applies the S-box to all state elements.
     pub rounds_f: u32,
 
-    /// Number of partial rounds (also called R_P).
-    /// In partial rounds, the S-box is applied only to the first state element.
+    /// Number of partial rounds (`R_P`).
+    /// Each partial round applies the S-box only to the first state element.
     pub rounds_p: u32,
 
-    /// Internal matrix diagonal values used in the linear layer of partial rounds.
+    /// Diagonal values for the internal matrix in the linear layer of partial rounds.
     pub internal_matrix_diagonal: [F; 4],
 
-    /// Round constants added to the state in each round.
+    /// Each round adds these round constants to the state.
     pub round_constant: [[F; 4]; 64],
 }
 
-/// The complete Poseidon2 configuration for BN254 — the only built-in instance,
-/// bit-compatible with noir's in-circuit `poseidon2`.
+/// This complete BN254 configuration is the only Poseidon2 configuration that the library includes.
+/// Its output matches Noir's in-circuit `poseidon2` bit for bit.
 pub(crate) static BN254_CONFIG: Poseidon2Config<Fr> = Poseidon2Config {
-    // The value of 4 is optimized for a PLONK proving system width of 4,
-    // to align with the number of witness columns available in the constraint system.
+    // A width of 4 matches the four witness columns in a PLONK constraint system of width 4.
     t: 4,
     rounds_f: 8,
     rounds_p: 56,
@@ -46,8 +46,8 @@ pub(crate) static BN254_CONFIG: Poseidon2Config<Fr> = Poseidon2Config {
     round_constant: ROUND_CONSTANT,
 };
 
-/// Internal matrix diagonal for Poseidon2 permutation.
-/// These values are used in the internal rounds for linear layer mixing.
+/// Diagonal values for the internal matrix of the Poseidon2 permutation.
+/// The linear layer uses these values to mix the state elements in internal rounds.
 const INTERNAL_MATRIX_DIAGONAL: [Fr; 4] = [
     MontFp!("0x10dc6e9c006ea38b04b1e03b4bd9490c0d03f98929ca1d7fb56821fd19d3b6e7"),
     MontFp!("0x0c28145b6a44df3e0149b3d0a30b3bb599df9756d4dd9b84a86b38cfb45a740b"),
@@ -56,7 +56,7 @@ const INTERNAL_MATRIX_DIAGONAL: [Fr; 4] = [
 ];
 
 /// Round constants for all rounds of Poseidon2.
-/// Contains 64 rounds, each with 4 field elements.
+/// This array contains 64 rounds, each with 4 field elements.
 const ROUND_CONSTANT: [[Fr; 4]; 64] = [
     [
         MontFp!("0x19b849f69450b06848da1d39bd5e4a4302bb86744edc26238b0878e269ed23e5"),

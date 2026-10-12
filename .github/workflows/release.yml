@@ -1,21 +1,26 @@
 name: release
 
-# Manual releases only. Start from Actions → release → Run workflow,
-# on branch `main`, with the new tag (e.g. v0.12.0).
+# This workflow creates releases only when you start it manually.
+# Start it from Actions → release → Run workflow on branch `main` with the new tag.
+# For example, use v0.12.0 as the tag.
 #
-# Order: bump (Cargo.toml, Cargo.lock, CHANGELOG, commit, tag)
-#      → package
-#      → GitHub Release (signed)
-#      → verify signatures
-#      → crates.io
+# The workflow uses this order:
+# 1. Update the version in Cargo.toml and Cargo.lock.
+# 2. Update CHANGELOG.
+# 3. Create the commit.
+# 4. Create the tag.
+# 5. Package the crate.
+# 6. Create the signed GitHub Release.
+# 7. Check the signatures.
+# 8. Publish to crates.io.
 #
-# crates.io versions cannot be replaced, so the registry upload waits
-# until the signed GitHub Release is in place.
+# crates.io does not permit replacement of versions.
+# The upload to crates.io waits until the signed GitHub Release exists.
 #
 # Secrets (see SECURITY.md):
-#   RELEASE_TOKEN          PAT that can push the bump commit to main
-#                          and the v* tag (bypass branch ruleset)
-#   CARGO_REGISTRY_TOKEN   crates.io API token (publish-new + publish-update)
+#   - RELEASE_TOKEN is a personal access token (PAT) that can bypass branch rules.
+#     It can push the version commit to main and the v* tag.
+#   - CARGO_REGISTRY_TOKEN is a crates.io API token with publish-new and publish-update permissions.
 on:
   workflow_dispatch:
     inputs:
@@ -28,7 +33,7 @@ permissions:
   contents: write
 
 concurrency:
-  # One release at a time so two dispatches cannot race on main.
+  # Run one release at a time to prevent concurrent changes to main.
   group: release
   cancel-in-progress: false
 
@@ -37,9 +42,10 @@ env:
 
 jobs:
   # ----------------------------------------------------------------
-  # Cut the bump commit and the tag on main. Re-running the workflow
-  # with a tag that already exists skips this job's write and the
-  # later jobs package that existing tag.
+  # Create the version commit on main.
+  # Create the tag.
+  # If the tag already exists, this job makes no changes.
+  # Later jobs package the existing tag.
   # ----------------------------------------------------------------
   bump:
     name: Bump version and tag
@@ -119,9 +125,9 @@ jobs:
             exit 1
           fi
 
-          # cog does not always see the CI checkout as `main`, so its
-          # branch_whitelist guard would reject the bump. This job
-          # already required GITHUB_REF == refs/heads/main.
+          # cog does not always recognize the CI checkout as `main`.
+          # Its `branch_whitelist` check would then reject the version update.
+          # This job already required `GITHUB_REF == refs/heads/main`.
           cfg="$(mktemp -d)/cog.toml"
           sed 's/^branch_whitelist.*/branch_whitelist = []/' cog.toml > "${cfg}"
           cog --config "${cfg}" bump --version "${VERSION}"
@@ -138,8 +144,9 @@ jobs:
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
   # ----------------------------------------------------------------
-  # Build the `.crate` once. github-release attaches these bytes;
-  # publish later uploads the same tree to crates.io.
+  # Build the `.crate` once.
+  # The github-release job attaches this file.
+  # The publish job later uploads the same source tree to crates.io.
   # ----------------------------------------------------------------
   package:
     name: Package crate
@@ -182,9 +189,9 @@ jobs:
           retention-days: 1
 
   # ----------------------------------------------------------------
-  # GitHub release. Attaches the packaged `.crate` and a SHA256SUMS
-  # file alongside the auto-generated notes. This job is the signed
-  # distribution point; crates.io upload follows after verify.
+  # This job creates the GitHub Release with signed artifacts.
+  # It attaches the packaged `.crate`, SHA256SUMS, and automatically generated notes.
+  # The upload to crates.io follows the signature check.
   # ----------------------------------------------------------------
   github-release:
     name: Create GitHub release
@@ -193,9 +200,8 @@ jobs:
     needs: [bump, package]
     env:
       TAG: ${{ needs.bump.outputs.tag }}
-    # id-token + attestations so cosign keyless +
-    # actions/attest-build-provenance can mint an OIDC token and write
-    # to the GitHub attestation store.
+    # Grant `id-token` and `attestations` permissions to cosign keyless and actions/attest-build-provenance.
+    # These tools can then create an OpenID Connect (OIDC) token and write to the GitHub attestation store.
     permissions:
       contents: write
       id-token: write
@@ -223,10 +229,10 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # pin-target: v3
 
-      # Keyless OIDC sign-blob over every staged artifact (.crate +
-      # SHA256SUMS). Each gets a sibling `.sig` + `.pem` (the Fulcio-
-      # issued ephemeral cert). Skips files that are themselves a sig
-      # or cert so a re-run is idempotent.
+      # Use keyless OIDC sign-blob to sign each staged artifact (`.crate` and SHA256SUMS).
+      # Each artifact gets a `.sig` file and a `.pem` file in the same directory.
+      # The `.pem` file contains a temporary certificate from Fulcio.
+      # Skip signature and certificate files so repeated runs do not sign them.
       - name: Sign release artifacts (cosign keyless)
         run: |
           set -euo pipefail
@@ -242,9 +248,9 @@ jobs:
           done
           ls -la
 
-      # SLSA v1.0 build provenance for the .crate + SHA256SUMS. Stored
-      # in the GitHub attestation store (queryable via `gh attestation
-      # verify`).
+      # Generate SLSA v1.0 build provenance for the `.crate` and SHA256SUMS.
+      # The GitHub attestation store contains the result.
+      # Use `gh attestation verify` to check it.
       - name: Generate SLSA build provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # pin-target: v2
         with:
@@ -287,11 +293,12 @@ jobs:
             dist/SHA256SUMS
 
   # ----------------------------------------------------------------
-  # Smoke test the GitHub Release. Re-downloads every asset and runs
-  # `cosign verify-blob` against each one. Hard-fails the workflow on
-  # any bad signature — this is the regression test for both the
-  # action SHA pins and the cert-identity regex below. crates.io
-  # waits on this job so a bad signature never reaches the registry.
+  # Test the GitHub Release with these steps:
+  # 1. Download every asset again.
+  # 2. Run `cosign verify-blob` for each artifact.
+  # Any invalid signature causes the workflow to fail.
+  # This regression test checks the pinned action SHAs and the certificate identity pattern below.
+  # The upload to crates.io waits for this job, so an invalid signature cannot reach the registry.
   # ----------------------------------------------------------------
   verify-release:
     name: Verify signed release
@@ -323,11 +330,10 @@ jobs:
         run: |
           set -euo pipefail
           cd verify
-          # Identity regex pins the signature to a run of THIS repo's
-          # release.yml. Manual releases sign as @refs/heads/main.
-          # Historical tag-push releases (through v0.11.1) signed as
-          # @refs/tags/vX.Y.Z; keep that alternative so those assets
-          # still verify.
+          # The identity pattern requires a signature from this repository's release.yml.
+          # Manual releases sign as @refs/heads/main.
+          # Releases through v0.11.1 used tag pushes and signed as @refs/tags/vX.Y.Z.
+          # Keep that alternative so signatures from those releases still pass the check.
           IDENTITY_RE='^https://github\.com/outbe/outbe-poseidon/\.github/workflows/release\.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+)$'
           OIDC_ISSUER='https://token.actions.githubusercontent.com'
           failed=0
@@ -360,8 +366,8 @@ jobs:
           echo "All artifacts verified."
 
   # ----------------------------------------------------------------
-  # crates.io upload from the same tagged tree. Re-cutting a tag
-  # whose version is already on crates.io skips the upload.
+  # Upload to crates.io from the same tagged source tree.
+  # If crates.io already contains this version, skip the upload.
   # ----------------------------------------------------------------
   publish:
     name: Publish to crates.io
@@ -392,9 +398,8 @@ jobs:
             exit 1
           fi
           version="${TAG#v}"
-          # Re-cutting a GitHub Release for an already-published version
-          # must not fail the rest of the pipeline on crates.io's
-          # "already uploaded" error. crates.io requires a User-Agent.
+          # If a version already exists on crates.io, recreating its GitHub Release must not fail with an "already uploaded" error.
+          # crates.io requires a User-Agent.
           status="$(curl -sS -o /tmp/crate.json -w '%{http_code}' \
             -A 'outbe-poseidon-ci (https://github.com/outbe/outbe-poseidon)' \
             "https://crates.io/api/v1/crates/outbe-poseidon/${version}")"

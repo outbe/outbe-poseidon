@@ -1,13 +1,19 @@
-//! A Poseidon2 hash generic over the prime field, with BN254 built in and
-//! bit-identical to what noir computes in-circuit: [`Poseidon2::permutation`]
-//! matches `bn254_blackbox_solver::poseidon2` (the `Poseidon2Permutation`
-//! blackbox), and the [`PoseidonHasher`](crate::PoseidonHasher) sponge matches
-//! `std::hash::poseidon2` (`iv = len << 64` in the capacity, absorb in `RATE`
-//! blocks, a final permutation, squeeze `state[0]`).
+//! This Poseidon2 hash supports generic prime fields and includes BN254 support.
+//! Its BN254 results match Noir's in-circuit results bit for bit:
 //!
-//! Width `t = 4`, S-box `x^5`, `R_F = 8` full + `R_P = 56` partial rounds. The
-//! BN254 constants are vendored verbatim in the private `constants` submodule;
-//! a Poseidon2 over any other field must supply its own [`Poseidon2Config`].
+//! * [`Poseidon2::permutation`] matches `bn254_blackbox_solver::poseidon2`, the `Poseidon2Permutation` blackbox.
+//! * The [`PoseidonHasher`](crate::PoseidonHasher) sponge matches `std::hash::poseidon2`.
+//!
+//! The sponge uses these steps:
+//!
+//! 1. Set the capacity to `iv = len << 64`.
+//! 2. Absorb the input in blocks of `RATE` elements.
+//! 3. Apply the final permutation.
+//! 4. Return `state[0]`.
+//!
+//! The parameters are width `t = 4`, S-box `x^5`, `R_F = 8` full rounds, and `R_P = 56` partial rounds.
+//! The private `constants` submodule contains exact copies of the BN254 constants.
+//! Poseidon2 for any other field requires a [`Poseidon2Config`](crate::poseidon2::Poseidon2Config) for that field.
 
 use ark_ff::PrimeField;
 
@@ -16,32 +22,30 @@ use crate::{PoseidonError, PoseidonHasher};
 mod constants;
 pub use constants::Poseidon2Config;
 
-/// Sponge rate (state width 4 = rate 3 + capacity 1).
+/// Sponge rate. The state width is 4, with a rate of 3 and a capacity of 1.
 const RATE: usize = 3;
 /// Permutation state width.
 const T: usize = 4;
 
-/// A Poseidon2 hasher generic over the prime field `F`, mirroring
-/// [`crate::Poseidon`].
+/// This Poseidon2 hasher supports the generic prime field `F`, as does [`crate::Poseidon`].
 ///
-/// The round constants and matrix diagonal are field-specific, so a hasher
-/// borrows a `'static` [`Poseidon2Config<F>`](Poseidon2Config). BN254 is built
-/// in via [`Poseidon2::<Fr>::new`](Poseidon2::new) and is bit-compatible with
-/// noir's in-circuit `poseidon2`; any other field is reached through
-/// [`with_config`](Poseidon2::with_config) with constants generated for that
-/// field.
+/// The round constants and matrix diagonal depend on the field.
+/// The hasher borrows a `'static` [`Poseidon2Config<F>`](Poseidon2Config) for these values.
+/// [`Poseidon2::<Fr>::new`](Poseidon2::new) provides BN254 support.
+/// Its output matches Noir's in-circuit `poseidon2` bit for bit.
+/// For another field, use [`with_config`](Poseidon2::with_config) with constants for that field.
 #[derive(Clone, Copy)]
 pub struct Poseidon2<F: PrimeField> {
     config: &'static Poseidon2Config<F>,
 }
 
 impl<F: PrimeField> Poseidon2<F> {
-    /// A Poseidon2 hasher using the given (field-specific) constants.
+    /// This constructor returns a Poseidon2 hasher with the given constants for the field.
     pub fn with_config(config: &'static Poseidon2Config<F>) -> Self {
         Self { config }
     }
 
-    /// `x^5` S-box.
+    /// This S-box raises `x` to the fifth power.
     #[inline(always)]
     fn single_box(x: F) -> F {
         let s = x * x; // x^2
@@ -63,8 +67,8 @@ impl<F: PrimeField> Poseidon2<F> {
         }
     }
 
-    /// External linear layer — bb's 4×4 matrix, copied step-for-step from the
-    /// barretenberg / `bn254_blackbox_solver` implementation.
+    /// The external linear layer uses Barretenberg's 4×4 matrix.
+    /// Each step matches the Barretenberg / `bn254_blackbox_solver` implementation.
     fn matrix_multiplication_4x4(input: &mut [F; T]) {
         let t0 = input[0] + input[1];
         let t1 = input[2] + input[3];
@@ -86,7 +90,7 @@ impl<F: PrimeField> Poseidon2<F> {
         input[3] = t4;
     }
 
-    /// Internal linear layer — diagonal matrix plus the state sum.
+    /// The internal linear layer uses a diagonal matrix and the sum of the state elements.
     fn internal_m_multiplication(&self, state: &mut [F; T]) {
         let mut sum = F::ZERO;
         for x in state.iter() {
@@ -99,13 +103,13 @@ impl<F: PrimeField> Poseidon2<F> {
         }
     }
 
-    /// The Poseidon2 permutation on a width-4 state.
+    /// This method applies the Poseidon2 permutation to a state with four elements.
     pub fn permutation(&self, inputs: &[F; T]) -> [F; T] {
         let cfg = self.config;
         let mut state = *inputs;
         Self::matrix_multiplication_4x4(&mut state);
 
-        // First half of the external (full) rounds.
+        // Apply the first half of the external (full) rounds.
         let rf_first = (cfg.rounds_f / 2) as usize;
         for r in 0..rf_first {
             self.add_round_constants(&mut state, r);
@@ -113,7 +117,7 @@ impl<F: PrimeField> Poseidon2<F> {
             Self::matrix_multiplication_4x4(&mut state);
         }
 
-        // Internal (partial) rounds — S-box on element 0 only.
+        // Apply the internal (partial) rounds, with the S-box on element 0 only.
         let p_end = rf_first + cfg.rounds_p as usize;
         for r in rf_first..p_end {
             state[0] += cfg.round_constant[r][0];
@@ -121,7 +125,7 @@ impl<F: PrimeField> Poseidon2<F> {
             self.internal_m_multiplication(&mut state);
         }
 
-        // Second half of the external rounds.
+        // Apply the second half of the external rounds.
         let num_rounds = (cfg.rounds_f + cfg.rounds_p) as usize;
         for r in p_end..num_rounds {
             self.add_round_constants(&mut state, r);
@@ -131,10 +135,13 @@ impl<F: PrimeField> Poseidon2<F> {
         state
     }
 
-    /// Fixed-arity Poseidon2 sponge of `inputs`, matching noir's
-    /// `std::hash::poseidon2`. `iv = (len << 64)` seeds the capacity; the rate
-    /// is absorbed in blocks of [`RATE`], then a final permutation squeezes
-    /// `state[0]`.
+    /// This method hashes `inputs` with a fixed-arity Poseidon2 sponge that matches Noir's `std::hash::poseidon2`.
+    /// The sponge uses these steps:
+    ///
+    /// 1. Set the capacity to `iv = len << 64`.
+    /// 2. Absorb the input in blocks of [`RATE`] elements.
+    /// 3. Apply the final permutation.
+    /// 4. Return `state[0]`.
     fn sponge(&self, inputs: &[F]) -> F {
         let len = inputs.len();
         // iv = len << 64
@@ -156,8 +163,8 @@ impl<F: PrimeField> Poseidon2<F> {
 }
 
 impl Poseidon2<ark_bn254::Fr> {
-    /// A BN254 Poseidon2 hasher, bit-compatible with noir's in-circuit
-    /// `poseidon2`.
+    /// This constructor returns a BN254 Poseidon2 hasher.
+    /// Its output matches Noir's in-circuit `poseidon2` bit for bit.
     pub fn new() -> Self {
         Self::with_config(&constants::BN254_CONFIG)
     }
@@ -170,9 +177,9 @@ impl Default for Poseidon2<ark_bn254::Fr> {
 }
 
 impl<F: PrimeField> PoseidonHasher<F> for Poseidon2<F> {
-    /// Hashes `inputs` with the Poseidon2 sponge. Always `Ok` — the sponge is
-    /// infallible — so the `Result` exists only for trait symmetry with
-    /// [`crate::Poseidon`].
+    /// This method hashes `inputs` with the Poseidon2 sponge.
+    /// The sponge cannot fail, so the method always returns `Ok`.
+    /// The `Result` type keeps the trait compatible with [`crate::Poseidon`].
     fn hash(&mut self, inputs: &[F]) -> Result<F, PoseidonError> {
         Ok(self.sponge(inputs))
     }
@@ -184,8 +191,8 @@ mod tests {
     use ark_bn254::Fr;
     use ark_ff::MontFp;
 
-    /// Known-answer for the permutation, from `bn254_blackbox_solver`'s own
-    /// `smoke_test` (the C++ barretenberg reference value).
+    /// This test checks the permutation against the reference value from `bn254_blackbox_solver::smoke_test`.
+    /// The reference value comes from the C++ Barretenberg implementation.
     #[test]
     fn permutation_kat_zeroes() {
         let out = Poseidon2::<Fr>::new().permutation(&[Fr::from(0u64); 4]);
@@ -201,10 +208,11 @@ mod tests {
         );
     }
 
-    /// Sponge KAT — ground truth from `nargo execute` of the same
-    /// `poseidon2_permutation` framing the circuits use (iv = len<<64; hash_3
-    /// absorb-permute then squeeze-permute). Locks the off-circuit hash to the
-    /// in-circuit computation.
+    /// This test checks the sponge against reference values from `nargo execute`.
+    /// It uses the same `poseidon2_permutation` sequence as the circuits, with `iv = len << 64`.
+    /// For `hash_3`, the sponge absorbs the input and applies a permutation.
+    /// It then applies another permutation to return the hash.
+    /// This test checks that the hash outside the circuit matches the circuit's result.
     #[test]
     fn hash_kat_from_noir() {
         let mut hasher = Poseidon2::<Fr>::new();
@@ -224,7 +232,7 @@ mod tests {
         );
     }
 
-    /// `with_config` using the built-in BN254 constants must match `new`.
+    /// With the included BN254 constants, `with_config` must match `new`.
     #[test]
     fn with_config_matches_new() {
         let inputs = [Fr::from(7u64), Fr::from(8u64), Fr::from(9u64)];

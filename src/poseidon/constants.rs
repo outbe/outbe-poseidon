@@ -1,14 +1,16 @@
-//! Constants and MDS matrix for the BN254 curve with the following properties:
+//! This module contains constants and an MDS matrix for the BN254 curve.
+//! The parameters have these properties:
 //!
 //! * x^5 S-boxes
-//! * 3 prime fields (one zero prime field and two inputs from the caller)
+//! * 3 field elements (one zero element and two inputs from the caller)
 //! * 8 full rounds and 57 partial rounds
 //!
-//! Those parameters are used for our Poseidon hash implementation.
+//! The Poseidon hash implementation uses these parameters.
 //!
-//! They were generated using the official script from the Poseidon paper:
+//! The official script from the Poseidon paper generated these parameters:
 //! [generate_parameters_grain.sage](https://extgit.iaik.tugraz.at/krypto/hadeshash/-/blob/master/code/generate_parameters_grain.sage)
-//! with the following parameters:
+//!
+//! The script used these arguments:
 //!
 //! ```bash
 //! sage generate_parameters_grain.sage 1 0 254 3 8 57 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
@@ -19,18 +21,17 @@ pub const PARTIAL_ROUNDS: [usize; 15] =
 pub const ALPHA: u64 = 5;
 
 use crate::{PoseidonError, PoseidonParameters};
-/// Returns Poseidon parameters for the BN254 curve with the following
-/// properties:
+/// The Poseidon parameters for the BN254 curve have these properties:
 ///
 /// * x^5 S-boxes
 /// * 3 inputs (one input with zeros and two inputs from the syscall)
 /// * 8 full rounds and 57 partial rounds
 ///
-/// The argument of this macro is a type which implements
+/// The field type implements
 /// [`ark_ff::PrimeField`](ark_ff::PrimeField).
 use ark_bn254::Fr;
 use ark_ff::{BigInt, PrimeField};
-// to avoid warnings when width_limit_13 feature is used
+// Suppress warnings when the `width_limit_13` feature is in use.
 #[allow(unused_variables)]
 pub fn get_poseidon_parameters<F: PrimeField + From<Fr>>(
     t: u8,

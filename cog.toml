@@ -3,32 +3,30 @@ branch_whitelist = ["main"]
 ignore_merge_commits = true
 generate_mono_repository_global_tag = false
 
-# Rewrite the package's `version` line in Cargo.toml before cog
-# assembles its `chore(version): vX.Y.Z` commit. The `0,/RE/` sed
-# range matches only the FIRST `^version` line, which by Cargo.toml
-# convention is the [package].version (dependency versions are
-# nested inside `{ version = "..." }` tables and don't anchor at
-# column 0). `^version.*` covers any column alignment.
+# Rewrite the package's `version` line in Cargo.toml before cog creates
+# its `chore(version): vX.Y.Z` commit.
+# The sed range `0,/RE/` matches only the first `^version` line.
+# By Cargo.toml convention, this line sets `[package].version`.
+# Dependency versions use nested `{ version = "..." }` tables and do not start at column 0.
+# The pattern `^version.*` matches any column alignment.
 #
-# outbe-poseidon is a single-package crate (no [workspace.package]),
-# so this targets [package].version. The replacement keeps
-# outbe-poseidon's unpadded `version = "..."` style.
+# outbe-poseidon contains one package and has no `[workspace.package]`.
+# The replacement targets `[package].version` and preserves the `version = "..."` format without alignment padding.
 #
-# Without this hook cog would tag the release but the crate would
-# still report the old version through Cargo.toml metadata and
-# whatever its CLI surface derives from CARGO_PKG_VERSION — drift
-# between the tag and the artifact's self-reported version.
+# Without this hook, cog would tag the release while Cargo.toml metadata would report the old version.
+# Any CLI output from CARGO_PKG_VERSION would also report the old version.
+# The tag and the version that the artifact reports would differ.
 pre_bump_hooks = [
     "sed -i '0,/^version/{s/^version.*/version = \"{{version}}\"/}' Cargo.toml",
-    # Cargo.lock is committed; keep the root package version in lockstep
-    # so release.yml's `cargo package --locked` still resolves.
+    # The repository tracks Cargo.lock.
+    # Update its root package version so `cargo package --locked` in release.yml can resolve dependencies.
     "sed -i '/^name = \"outbe-poseidon\"$/{n;s/^version = \".*\"/version = \"{{version}}\"/;}' Cargo.lock",
 ]
 
-# No post_bump_hooks. release.yml's bump job pushes the commit and
-# the v* tag after cog returns. A local `cog bump` must not push a
-# tag that has no GitHub Release or crates.io publish; cut releases
-# from Actions → release → Run workflow.
+# This configuration has no `post_bump_hooks`.
+# The bump job in release.yml pushes the commit and the v* tag after cog returns.
+# A local `cog bump` must not push a tag without a GitHub Release or a crates.io publication.
+# Create releases from Actions → release → Run workflow.
 
 [changelog]
 path = "CHANGELOG.md"

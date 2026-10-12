@@ -1,8 +1,8 @@
-//! Circom-compatible Poseidon — the original Outbe hash.
+//! This module implements the original Outbe hash, which is compatible with Circom's Poseidon.
 //!
-//! The permutation and pre-generated BN254 parameters live here; the
-//! [`PoseidonHasher`](PoseidonHasher) trait this implements is defined in
-//! the crate root and shared with [`Poseidon2`](crate::Poseidon2).
+//! This module contains the permutation and pre-generated BN254 parameters.
+//! The crate root defines the [`PoseidonHasher`](PoseidonHasher) trait.
+//! Both this implementation and [`Poseidon2`](crate::Poseidon2) use that trait.
 
 use ark_bn254::Fr;
 #[cfg(test)]
@@ -17,17 +17,15 @@ mod constants;
 pub struct PoseidonParameters<F: PrimeField> {
     /// Round constants.
     pub ark: Vec<F>,
-    /// MDS matrix.
+    /// Maximum distance separable (MDS) matrix.
     pub mds: Vec<Vec<F>>,
-    /// Number of full rounds (where S-box is applied to all elements of the
-    /// state).
+    /// Number of full rounds. Each full round applies the S-box to all state elements.
     pub full_rounds: usize,
-    /// Number of partial rounds (where S-box is applied only to the first
-    /// element of the state).
+    /// Number of partial rounds. Each partial round applies the S-box only to the first state element.
     pub partial_rounds: usize,
-    /// Number of prime fields in the state.
+    /// Number of field elements in the state.
     pub width: usize,
-    /// Exponential used in S-box to power elements of the state.
+    /// Exponent for the S-box operation on state elements.
     pub alpha: u64,
 }
 
@@ -51,7 +49,7 @@ impl<F: PrimeField> PoseidonParameters<F> {
     }
 }
 
-/// A stateful sponge performing Poseidon hash computation.
+/// This stateful sponge calculates Poseidon hashes.
 pub struct Poseidon<F: PrimeField> {
     params: PoseidonParameters<F>,
     domain_tag: F,
@@ -59,10 +57,9 @@ pub struct Poseidon<F: PrimeField> {
 }
 
 impl<F: PrimeField> Poseidon<F> {
-    /// Returns a new Poseidon hasher based on the given parameters.
+    /// This constructor returns a Poseidon hasher with the given parameters.
     ///
-    /// Optionally, a domain tag can be provided. If it is not provided, it
-    /// will be set to zero.
+    /// The domain tag defaults to zero.
     pub fn new(params: PoseidonParameters<F>) -> Self {
         Self::with_domain_tag(params, F::ZERO)
     }
@@ -131,7 +128,7 @@ impl<F: PrimeField> PoseidonHasher<F> for Poseidon<F> {
         let all_rounds = self.params.full_rounds + self.params.partial_rounds;
         let half_rounds = self.params.full_rounds / 2;
 
-        // full rounds + partial rounds
+        // Apply the full rounds and partial rounds.
         for round in 0..half_rounds {
             self.apply_ark(round);
             self.apply_sbox_full();
@@ -184,7 +181,7 @@ impl<F: PrimeField> Poseidon<F> {
 mod test {
     use super::*;
 
-    /// Checks the hash of byte slices consistng of ones and twos.
+    /// This test checks the hash of byte slices that contain ones and twos.
     #[test]
     fn test_poseidon_bn254_x5_fq_input_ones_twos() {
         let input1 = Fr::from_le_bytes_mod_order(&[1u8; 32]);
